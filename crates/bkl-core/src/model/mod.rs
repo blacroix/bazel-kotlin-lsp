@@ -1,6 +1,8 @@
 //! Builds kotlin-lsp's project model from the aspect's targets.
 
 #[allow(dead_code)] // used by build_model (Task 8)
+#[allow(dead_code)] // used by build_model (Task 8)
+mod deps;
 mod modules;
 mod paths;
 mod roles;
@@ -11,6 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::bazel_mod::LocalModule;
 use crate::scope::Scope;
 
+pub use deps::jar_targets;
 #[allow(unused_imports)]
 pub(crate) use modules::{ModuleGroup, SourceRootEntry, group_modules};
 pub use paths::resolve_exec_path;
