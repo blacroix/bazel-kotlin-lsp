@@ -167,10 +167,15 @@ pub fn generate(spec: &Spec, out: &Path) -> anyhow::Result<()> {
     for m in 0..spec.modules {
         let _ = writeln!(app, "import {}", fqcn(m, last));
     }
-    let calls = (0..spec.modules)
+    let mut calls: Vec<String> = (0..spec.modules)
         .map(|_| format!("{}().call()", class_name(last)))
-        .collect::<Vec<_>>()
-        .join(" + ");
+        .collect();
+    // m00/t000 is reachable from `app` only through the chain of exported module dependencies.
+    if last > 0 {
+        let _ = writeln!(app, "import {}", fqcn(0, 0));
+        calls.push(format!("{}().call()", class_name(0)));
+    }
+    let calls = calls.join(" + ");
     let _ = write!(app, "\nfun main() = println({calls})\n");
     write("app/src/main/kotlin/synth/app/App.kt", &app)?;
     Ok(())
@@ -238,6 +243,9 @@ mod tests {
         assert_eq!(snapshot(a.path()), snapshot(b.path()));
         assert!(a.path().join("mods/m02/t003/BUILD.bazel").is_file());
         assert!(a.path().join("app/BUILD.bazel").is_file());
+        let app =
+            std::fs::read_to_string(a.path().join("app/src/main/kotlin/synth/app/App.kt")).unwrap();
+        assert!(app.contains("import synth.m00.t000.T000\n"), "{app}");
     }
 
     fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {

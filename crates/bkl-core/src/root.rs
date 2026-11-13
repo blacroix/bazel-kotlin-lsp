@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::bazel_mod::{normalize, string_assignment};
+use crate::bazel_mod::normalize;
 
 const MARKERS: [&str; 4] = ["MODULE.bazel", "REPO.bazel", "WORKSPACE", "WORKSPACE.bazel"];
 
@@ -29,15 +29,58 @@ pub fn find_bazel_root(start: &Path) -> Option<BazelRoot> {
 }
 
 fn overrides(ancestor: &Path, module_dir: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(ancestor.join("MODULE.bazel")) else {
-        return false;
-    };
     let Ok(rel) = module_dir.strip_prefix(ancestor) else {
         return false;
     };
-    text.lines()
-        .filter_map(|line| string_assignment(line.trim()))
-        .any(|(key, value)| key == "path" && normalize(Path::new(&value)) == normalize(rel))
+    let mut pending = vec![ancestor.join("MODULE.bazel")];
+    let mut seen = Vec::new();
+    while let Some(file) = pending.pop() {
+        if seen.contains(&file) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        if string_arguments(&text, "path")
+            .any(|value| normalize(Path::new(&value)) == normalize(rel))
+        {
+            return true;
+        }
+        let package = file.parent().unwrap_or(ancestor).to_path_buf();
+        pending.extend(
+            string_arguments(&text, "include")
+                .filter_map(|label| include_path(ancestor, &package, &label)),
+        );
+        seen.push(file);
+    }
+    false
+}
+
+/// Values of `key = "..."` keyword arguments and of `key("...")` calls, anywhere in Starlark text.
+fn string_arguments<'a>(text: &'a str, key: &'a str) -> impl Iterator<Item = String> + 'a {
+    text.match_indices(key).filter_map(move |(at, _)| {
+        let before = text[..at].chars().next_back();
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+            return None;
+        }
+        let rest = text[at + key.len()..].trim_start();
+        let rest = rest
+            .strip_prefix('=')
+            .or_else(|| rest.strip_prefix('('))?
+            .trim_start();
+        let value = rest.strip_prefix('"')?;
+        Some(value[..value.find('"')?].to_string())
+    })
+}
+
+/// The file an `include()` label points to: `//pkg:file` from the workspace root, `:file` from the including
+/// file's folder. Labels into other repositories are not followed.
+fn include_path(root: &Path, package: &Path, label: &str) -> Option<PathBuf> {
+    if let Some(rest) = label.strip_prefix("//") {
+        let (pkg, name) = rest.split_once(':')?;
+        return Some(root.join(pkg).join(name));
+    }
+    label.strip_prefix(':').map(|name| package.join(name))
 }
 
 #[cfg(test)]
@@ -63,6 +106,59 @@ mod tests {
         assert_eq!(
             find_bazel_root(&root.join("mods/m/src")),
             Some(BazelRoot::Bzlmod(root.to_path_buf()))
+        );
+    }
+
+    #[test]
+    fn single_line_override_is_recognised() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        touch(
+            &root.join("MODULE.bazel"),
+            "local_path_override(module_name = \"m\", path = \"mods/m\")\n",
+        );
+        touch(&root.join("mods/m/MODULE.bazel"), "module(name = \"m\")\n");
+        assert_eq!(
+            find_bazel_root(&root.join("mods/m")),
+            Some(BazelRoot::Bzlmod(root.to_path_buf()))
+        );
+    }
+
+    #[test]
+    fn override_in_included_file_is_recognised() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        touch(
+            &root.join("MODULE.bazel"),
+            "include(\"//bazel:deps.MODULE.bazel\")\n",
+        );
+        touch(
+            &root.join("bazel/deps.MODULE.bazel"),
+            "include(\":more.MODULE.bazel\")\n",
+        );
+        touch(
+            &root.join("bazel/more.MODULE.bazel"),
+            "local_path_override(\n    module_name = \"m\",\n    path = \"mods/m\")\n",
+        );
+        touch(&root.join("mods/m/MODULE.bazel"), "module(name = \"m\")\n");
+        assert_eq!(
+            find_bazel_root(&root.join("mods/m")),
+            Some(BazelRoot::Bzlmod(root.to_path_buf()))
+        );
+    }
+
+    #[test]
+    fn other_path_like_keys_do_not_count() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        touch(
+            &root.join("MODULE.bazel"),
+            "archive_override(module_name = \"x\", strip_path = \"mods/m\")\n",
+        );
+        touch(&root.join("mods/m/MODULE.bazel"), "module(name = \"m\")\n");
+        assert_eq!(
+            find_bazel_root(&root.join("mods/m")),
+            Some(BazelRoot::Bzlmod(root.join("mods/m")))
         );
     }
 

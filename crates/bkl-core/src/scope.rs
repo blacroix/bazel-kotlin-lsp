@@ -11,7 +11,8 @@ use crate::bazel_mod::{LocalModule, normalize};
 /// Above this many JVM targets, a folder opened below the workspace root narrows the scope to that folder.
 pub const NARROW_THRESHOLD: usize = 500;
 
-/// `.bazel-kotlin.toml`. Directories are relative to the workspace root; a leading `-` excludes one.
+/// `.bazel-kotlin.toml`. Directories are relative to the workspace root; a leading `-` excludes one. Without any
+/// included directory, the whole repository is included. `targets` are added to the directories.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScopeConfig {
@@ -64,6 +65,9 @@ impl Scope {
                 }
                 None => includes.push(normalize(Path::new(dir.trim_end_matches('/')))),
             }
+        }
+        if includes.is_empty() {
+            includes.push(PathBuf::new());
         }
         let targets = cfg
             .targets
@@ -328,6 +332,16 @@ mod tests {
         assert!(s.contains("@@greeting+//:greeting", Path::new("modules/greeting")));
         assert!(s.contains("@@shapes+//:shapes", Path::new("modules/shapes")));
         assert!(!s.contains("@@//tools:other", Path::new("tools")));
+    }
+
+    #[test]
+    fn targets_or_excludes_alone_keep_the_whole_repo() {
+        let only_targets = Scope::from_config(&cfg(&[], &["//tools:gen"]), &mapping()).unwrap();
+        assert!(only_targets.contains("@@//app:a", Path::new("app")));
+        assert!(only_targets.contains("@@//tools:gen", Path::new("tools")));
+        let only_excludes = Scope::from_config(&cfg(&["-legacy"], &[]), &mapping()).unwrap();
+        assert!(only_excludes.contains("@@//app:a", Path::new("app")));
+        assert!(!only_excludes.contains("@@//legacy:a", Path::new("legacy")));
     }
 
     #[test]

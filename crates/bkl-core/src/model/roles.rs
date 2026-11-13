@@ -28,11 +28,18 @@ pub fn classify(t: &TargetInfo, ctx: &ModelContext) -> Role {
             return Role::Module;
         }
     }
-    let has_sources = !t.srcs.is_empty() || !t.generated_srcs.is_empty();
-    if !t.import_jars.is_empty() || (has_sources && !t.class_jars.is_empty()) {
+    if !t.import_jars.is_empty() || (!t.class_jars.is_empty() && !is_sourceless_library_rule(t)) {
         return Role::Library;
     }
     Role::Aggregator
+}
+
+/// A `java_library`/`kt_jvm_library` without sources only re-exports its deps; its jar is empty. Other rules
+/// without `srcs` (java_proto_library, java_grpc_library, ...) produce real jars.
+fn is_sourceless_library_rule(t: &TargetInfo) -> bool {
+    t.srcs.is_empty()
+        && t.generated_srcs.is_empty()
+        && matches!(t.kind.as_str(), "java_library" | "kt_jvm_library")
 }
 
 fn inside_local_module(package: &Path, ctx: &ModelContext) -> bool {
@@ -141,6 +148,23 @@ mod tests {
         t.class_jars = vec!["bazel-out/k8/bin/deps/libserialization.jar".into()];
         t.exports = vec!["@@maven//:ser".into()];
         assert_eq!(classify(&t, &ctx()), Role::Aggregator);
+    }
+
+    #[test]
+    fn sourceless_targets_with_real_jars_are_libraries() {
+        for kind in [
+            "java_proto_library",
+            "java_grpc_library",
+            "java_lite_proto_library",
+        ] {
+            let mut t = target("@@//proto:api_java", kind);
+            t.class_jars = vec!["bazel-out/k8/bin/proto/libapi-speed.jar".into()];
+            t.source_jars = vec!["bazel-out/k8/bin/proto/api-speed-src.jar".into()];
+            assert_eq!(classify(&t, &ctx()), Role::Library, "{kind}");
+        }
+        let mut kt_exports = target("@@//deps:all", "kt_jvm_library");
+        kt_exports.class_jars = vec!["bazel-out/k8/bin/deps/all.jar".into()];
+        assert_eq!(classify(&kt_exports, &ctx()), Role::Aggregator);
     }
 
     #[test]

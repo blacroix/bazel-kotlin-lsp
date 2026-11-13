@@ -8,11 +8,11 @@ use std::time::Instant;
 use bkl_core::aspect::read_targets;
 use bkl_core::aspect_template::{JARS_GROUP, JSON_GROUP, RuleRepos, render_aspect};
 use bkl_core::bazel_mod::{
-    LocalModule, ModGraph, local_modules, parse_mod_graph, parse_repo_mapping, parse_show_repo,
-    rule_repos,
+    LocalModule, ModGraph, local_modules, normalize, parse_mod_graph, parse_repo_mapping,
+    parse_show_repo, rule_repos,
 };
 use bkl_core::bep::aspect_json_files;
-use bkl_core::cache::{CacheLayout, cache_root, write_if_changed};
+use bkl_core::cache::{CacheLayout, cache_root, lock_exclusive, write_if_changed};
 use bkl_core::model::{ModelContext, RealFs, build_model, jar_targets, render};
 use bkl_core::root::{BazelRoot, find_bazel_root};
 use bkl_core::scope::{NARROW_THRESHOLD, Scope, ScopeConfig, load_scope_config, target_patterns};
@@ -118,6 +118,7 @@ impl Timer {
 
 pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
     let start_dir = std::path::absolute(&opts.start_dir)
+        .map(|p| normalize(&p))
         .map_err(|e| SyncError::new(format!("{}: {e}", opts.start_dir.display())))?;
     let root = match find_bazel_root(&start_dir) {
         None => {
@@ -145,6 +146,8 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
     std::fs::create_dir_all(&out_dir)
         .and_then(|_| std::fs::create_dir_all(&layout.dir))
         .map_err(|e| SyncError::new(format!("{}: {e}", out_dir.display())))?;
+    let _lock = lock_exclusive(&layout.dir)
+        .map_err(|e| SyncError::new(format!("locking {}: {e}", layout.dir.display())))?;
     std::fs::write(&log, "").map_err(|e| SyncError::new(format!("{}: {e}", log.display())))?;
 
     let mut timer = Timer(BTreeMap::new(), Instant::now());
@@ -263,11 +266,11 @@ fn sync_in(
     }
     let mut outcome = classify_build(build.exit_code, files.local.len());
     if outcome == BuildOutcome::Failed {
-        return Err(SyncError::bazel(
-            format!("Bazel build failed (exit {})", build.exit_code),
-            &build,
-            log,
-        ));
+        let message = match (build.exit_code, files.local.len()) {
+            (0, 0) => "Bazel produced no aspect output".to_string(),
+            (code, _) => format!("Bazel build failed (exit {code})"),
+        };
+        return Err(SyncError::bazel(message, &build, log));
     }
     timer.lap("aspect_build");
 

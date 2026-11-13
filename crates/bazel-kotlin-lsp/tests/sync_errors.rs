@@ -44,3 +44,14 @@ fn cli_exit_code_and_stdout_on_error() {
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("not inside a Bazel workspace"));
 }
+
+#[test]
+fn dot_dot_in_start_dir_is_normalised() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir(t.path().join("sub")).unwrap();
+    let mut options = options(t.path());
+    options.start_dir = t.path().join("sub/..");
+    let err = run_sync(&options).unwrap_err().to_string();
+    assert!(!err.contains(".."), "{err}");
+    assert!(err.contains(&t.path().display().to_string()), "{err}");
+}

@@ -83,15 +83,16 @@ fn add_extra_package(repo: &Path) -> anyhow::Result<()> {
 fn first_definition(args: &BenchArgs, kotlin_lsp: &Path, model_dir: &Path) -> anyhow::Result<u128> {
     let scratch = tempfile::tempdir()?;
     let app = std::fs::read_to_string(args.repo.join("app/src/main/kotlin/synth/app/App.kt"))?;
-    let import = app
-        .lines()
-        .find(|l| l.starts_with("import synth.m00."))
-        .context("App.kt has no m00 import")?;
-    let class = import.rsplit('.').next().unwrap_or_default();
+    let import = "import synth.m00.t000.T000";
+    anyhow::ensure!(
+        app.lines().any(|l| l == import),
+        "App.kt does not import m00/t000"
+    );
+    let class = "T000";
     let cases = scratch.path().join("cases.json");
     std::fs::write(
         &cases,
-        json!([{"name": "app -> m00", "file": "app/src/main/kotlin/synth/app/App.kt", "line_contains": import, "symbol": class, "expect": "mods/m00/"}]).to_string(),
+        json!([{"name": "app -> m00/t000 through exported dependencies", "file": "app/src/main/kotlin/synth/app/App.kt", "line_contains": import, "symbol": class, "expect": "mods/m00/t000/"}]).to_string(),
     )?;
     let start = Instant::now();
     let results = bkl_probe::run(&bkl_probe::ProbeArgs {

@@ -15,6 +15,14 @@ bazel-kotlin-lsp sync --workspace /path/to/repo
 `sync` prints the folder holding the generated `workspace.json`. Point kotlin-lsp at it with the initialization
 option `{"projects": [{"type": "json", "path": "file:///that/folder"}]}`. Nothing is written into your repository.
 
+## Supported versions
+
+- Bazel 8.0.0 or later, with Bzlmod (`MODULE.bazel`). WORKSPACE-only repositories are not supported.
+- Tested in CI on Bazel 8.0.0 (with rules_kotlin 2.1.0, rules_java 8.6.0, rules_jvm_external 6.6), 8.8.2 and 9.3.2
+  (with rules_kotlin 2.4.21, rules_java 9.9.0, rules_jvm_external 7.2). Recent rule versions may themselves need a
+  recent Bazel 8.x.
+- kotlin-lsp 271.2085.0.
+
 ## Cost
 
 `sync` runs Bazel with its own output base under the cache folder (`~/Library/Caches/bazel-kotlin-lsp` on macOS,

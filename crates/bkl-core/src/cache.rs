@@ -55,6 +55,18 @@ impl CacheLayout {
     }
 }
 
+/// Holds `<dir>/sync.lock` exclusively until the returned file is dropped, waiting for any other holder.
+pub fn lock_exclusive(dir: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::create_dir_all(dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("sync.lock"))?;
+    file.lock()?;
+    Ok(file)
+}
+
 /// Writes `bytes` unless the file already holds them; returns whether it wrote. The write is a rename of a
 /// temporary file in the same folder, so readers never see a partial file.
 pub fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<bool> {
@@ -147,6 +159,19 @@ mod tests {
         assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), before);
         assert!(write_if_changed(&p, b"two").unwrap());
         assert_eq!(std::fs::read(&p).unwrap(), b"two");
+    }
+
+    #[test]
+    fn sync_lock_is_exclusive() {
+        let t = tempfile::tempdir().unwrap();
+        let held = lock_exclusive(&t.path().join("sub")).unwrap();
+        let other = std::fs::File::open(t.path().join("sub/sync.lock")).unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(held);
+        assert!(other.try_lock().is_ok());
     }
 
     #[test]

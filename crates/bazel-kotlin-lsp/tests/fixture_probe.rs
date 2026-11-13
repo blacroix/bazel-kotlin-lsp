@@ -24,12 +24,24 @@ fn probe_args(root: &Path, model_dir: &Path, scratch: &Path) -> ProbeArgs {
         model_dir: model_dir.to_path_buf(),
         index_dir: Some(scratch.join("index")),
         timeout: Duration::from_secs(180),
-        log: Some(scratch.join("server.log")),
+        log: Some(server_log(scratch)),
         server: vec![
             kotlin_lsp().to_string_lossy().into_owned(),
             "--stdio".into(),
             format!("--system-path={}", scratch.join("system").display()),
         ],
+    }
+}
+
+/// Under `BKL_PROBE_LOG_DIR` when set (CI uploads it on failure), else in the test's scratch folder.
+fn server_log(scratch: &Path) -> PathBuf {
+    match std::env::var_os("BKL_PROBE_LOG_DIR") {
+        Some(dir) => {
+            std::fs::create_dir_all(&dir).unwrap();
+            let name = scratch.file_name().unwrap().to_string_lossy();
+            PathBuf::from(dir).join(format!("kotlin-lsp-{name}.log"))
+        }
+        None => scratch.join("server.log"),
     }
 }
 

@@ -39,12 +39,14 @@ pub enum BuildOutcome {
     Failed,
 }
 
-/// 0 is a full build; 1 (build or analysis failure under `--keep_going`) is partial when the aspect still produced
-/// output; anything else (bad flags, crash, interrupted) is a failure.
+/// No aspect output is always a failure (the stdlib target alone produces some). Otherwise 0 is a full build, 1
+/// (build or analysis failure under `--keep_going`) is partial, and anything else (bad flags, crash,
+/// interrupted) is a failure.
 pub fn classify_build(exit_code: i32, json_files: usize) -> BuildOutcome {
-    match exit_code {
-        0 => BuildOutcome::Full,
-        1 if json_files > 0 => BuildOutcome::Partial,
+    match (exit_code, json_files) {
+        (_, 0) => BuildOutcome::Failed,
+        (0, _) => BuildOutcome::Full,
+        (1, _) => BuildOutcome::Partial,
         _ => BuildOutcome::Failed,
     }
 }
@@ -237,7 +239,7 @@ mod tests {
     #[test]
     fn classify_build_table() {
         assert_eq!(classify_build(0, 3), BuildOutcome::Full);
-        assert_eq!(classify_build(0, 0), BuildOutcome::Full);
+        assert_eq!(classify_build(0, 0), BuildOutcome::Failed);
         assert_eq!(classify_build(1, 3), BuildOutcome::Partial);
         assert_eq!(classify_build(1, 0), BuildOutcome::Failed);
         assert_eq!(classify_build(2, 3), BuildOutcome::Failed);
