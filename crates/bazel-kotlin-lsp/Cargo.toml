@@ -10,6 +10,7 @@ publish = false
 bkl-core = { path = "../bkl-core" }
 anyhow.workspace = true
 clap.workspace = true
+shlex.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

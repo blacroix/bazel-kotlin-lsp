@@ -2,6 +2,7 @@ pub mod aspect;
 pub mod aspect_template;
 pub mod bazel_mod;
 pub mod bep;
+pub mod cache;
 pub mod model;
 pub mod root;
 pub mod scope;
