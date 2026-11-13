@@ -56,6 +56,20 @@
     "expect": "app/src/main/kotlin/fixture/app/App.kt"
   },
   {
+    "name": "transitive module through an exported dependency",
+    "file": "app/src/test/kotlin/fixture/app/AppTest.kt",
+    "line_contains": "import fixture.greeting.Greeter",
+    "symbol": "Greeter",
+    "expect": "modules/greeting/src/main/kotlin/"
+  },
+  {
+    "name": "transitive library through an exported dependency",
+    "file": "app/src/test/kotlin/fixture/app/AppTest.kt",
+    "line_contains": "import kotlinx.serialization.SerialName",
+    "symbol": "SerialName",
+    "expect": "-sources.jar"
+  },
+  {
     "name": "compiler plugin and opt-in",
     "file": "app/src/main/kotlin/fixture/app/App.kt",
     "expect_no_errors": true

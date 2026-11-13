@@ -1,0 +1,31 @@
+name: Bench
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    env:
+      USE_BAZEL_VERSION: "9.3.2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: actions/cache@v6
+        with:
+          path: .cache/kotlin-lsp
+          key: kotlin-lsp-271.2085.0-${{ runner.os }}-${{ runner.arch }}
+      - run: mise run kotlin-lsp:fetch
+      - run: cargo build --release -p bazel-kotlin-lsp -p bkl-synth
+      - run: ./target/release/bkl-synth generate --out "$RUNNER_TEMP/synth"
+      - run: >
+          ./target/release/bkl-synth bench --repo "$RUNNER_TEMP/synth"
+          --sync-bin "$PWD/target/release/bazel-kotlin-lsp"
+          --kotlin-lsp "$PWD/.cache/kotlin-lsp/271.2085.0/kotlin-server-271.2085.0/bin/intellij-server"
+          --out bench.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bench
+          path: bench.json

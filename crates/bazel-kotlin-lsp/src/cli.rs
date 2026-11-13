@@ -39,6 +39,9 @@ pub struct SyncArgs {
     /// Use the user's own Bazel output base instead of a dedicated one.
     #[arg(long)]
     pub shared_output_base: bool,
+    /// Cache root instead of the platform cache folder (tests and benchmarks).
+    #[arg(long, value_name = "DIR", hide = true)]
+    pub cache_root: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -63,6 +66,14 @@ mod tests {
         assert_eq!(a.scope_dir, ["app", "-app/legacy"]);
         assert_eq!(a.target, ["//tools:gen"]);
         assert!(!a.shared_output_base);
+    }
+
+    #[test]
+    fn hidden_cache_root_flag_parses() {
+        let cli =
+            Cli::try_parse_from(["bazel-kotlin-lsp", "sync", "--cache-root", "/tmp/c"]).unwrap();
+        let Command::Sync(a) = cli.command;
+        assert_eq!(a.cache_root, Some(PathBuf::from("/tmp/c")));
     }
 
     #[test]

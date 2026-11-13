@@ -79,6 +79,7 @@ pub fn build_model(targets: &[TargetInfo], ctx: &ModelContext, fs: &dyn Fs) -> M
             .map(|name| Dependency::Module {
                 name: name.clone(),
                 scope: "compile".into(),
+                is_exported: true,
             })
             .collect();
         dependencies.extend(
@@ -89,6 +90,7 @@ pub fn build_model(targets: &[TargetInfo], ctx: &ModelContext, fs: &dyn Fs) -> M
                 .map(|l| Dependency::Library {
                     name: l.clone(),
                     scope: "compile".into(),
+                    is_exported: true,
                 }),
         );
         dependencies.push(Dependency::ModuleSource);

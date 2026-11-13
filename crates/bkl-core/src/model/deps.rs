@@ -32,21 +32,31 @@ impl<'a> Graph<'a> {
             .filter_map(|d| self.targets.get_key_value(d.as_str()).map(|(k, _)| *k))
     }
 
-    /// Everything reachable over deps, exports and associates; rules_kotlin compiles against all of it.
-    pub fn closure(&self, from: &[String]) -> BTreeSet<String> {
+    /// What a module must list itself: the first modules reached, and every library reached, walking through
+    /// non-module targets. Modules further away come through those modules' exported dependencies.
+    pub fn frontier(&self, from: &[String]) -> (BTreeSet<String>, BTreeSet<String>) {
+        let (mut modules, mut libraries) = (BTreeSet::new(), BTreeSet::new());
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         let mut stack: Vec<&str> = from.iter().map(String::as_str).collect();
         while let Some(current) = stack.pop() {
             for dep in self.edges(current) {
-                if seen.insert(dep) {
-                    stack.push(dep);
+                if !seen.insert(dep) || from.iter().any(|f| f == dep) {
+                    continue;
+                }
+                match self.roles.get(dep) {
+                    Some(Role::Module) => {
+                        modules.insert(dep.to_string());
+                    }
+                    Some(Role::Library) => {
+                        libraries.insert(dep.to_string());
+                        stack.push(dep);
+                    }
+                    Some(Role::Aggregator) => stack.push(dep),
+                    _ => {}
                 }
             }
         }
-        seen.into_iter()
-            .filter(|l| !from.iter().any(|f| f == l))
-            .map(str::to_string)
-            .collect()
+        (modules, libraries)
     }
 
     /// The first modules and libraries reached when walking only through aggregators.
@@ -109,13 +119,11 @@ pub(crate) fn module_deps(
     names: &BTreeMap<String, String>,
     ctx: &ModelContext,
 ) -> ModuleDeps {
-    let closure = graph.closure(&group.labels);
+    let (reached_modules, reached_libraries) = graph.frontier(&group.labels);
     let direct = graph.direct(&group.labels);
-    let role = |l: &str| graph.roles.get(l).copied();
 
-    let modules: BTreeSet<String> = closure
+    let modules: BTreeSet<String> = reached_modules
         .iter()
-        .filter(|l| role(l) == Some(Role::Module))
         .filter_map(|l| names.get(l).cloned())
         .filter(|n| *n != group.name)
         .collect();
@@ -126,7 +134,7 @@ pub(crate) fn module_deps(
         .filter(|s| graph.targets.contains_key(s));
     let mut chosen: BTreeSet<String> = BTreeSet::new();
     let mut by_key: BTreeMap<String, Vec<(&str, String)>> = BTreeMap::new();
-    for label in closure.iter().filter(|l| role(l) == Some(Role::Library)) {
+    for label in &reached_libraries {
         match maven_coordinate(graph.targets[label.as_str()]) {
             Some((key, _)) if stdlib.is_some() && key == STDLIB_KEY => {}
             Some((key, version)) => by_key.entry(key).or_default().push((label, version)),
@@ -267,7 +275,7 @@ mod tests {
         ];
         let graph = Graph::new(&targets, &ctx());
         let from = vec!["@@//app:app".to_string()];
-        assert!(graph.closure(&from).contains("@@maven//:ser"));
+        assert!(graph.frontier(&from).1.contains("@@maven//:ser"));
         assert_eq!(
             graph.direct(&from),
             BTreeSet::from(["@@maven//:ser".to_string()])
@@ -353,6 +361,45 @@ mod tests {
         };
         assert!(w.deps_of("@@shapes+//shapes:shapes").modules.is_empty());
         assert_eq!(w.deps_of("@@//app:app").modules, ["shapes.shapes.shapes"]);
+    }
+
+    #[test]
+    fn modules_list_only_the_first_modules_reached() {
+        let w = World {
+            targets: vec![
+                module("@@//a:a", &["@@//b:b"]),
+                module("@@//b:b", &["@@//c:c", "@@maven//:x"]),
+                module("@@//c:c", &[]),
+                maven("x", "g:x:1.0", &["y"]),
+                maven("y", "g:y:1.0", &[]),
+            ],
+            ctx: ctx(),
+        };
+        let a = w.deps_of("@@//a:a");
+        assert_eq!(a.modules, ["fixture.b.b"]);
+        assert!(a.libraries.is_empty(), "{a:?}");
+        let b = w.deps_of("@@//b:b");
+        assert_eq!(b.modules, ["fixture.c.c"]);
+        assert_eq!(b.libraries, ["@@maven//:x", "@@maven//:y"]);
+    }
+
+    #[test]
+    fn modules_behind_out_of_scope_libraries_are_reached() {
+        let mut c = ctx();
+        c.scope = crate::scope::Scope::folder(std::path::Path::new("a"));
+        let mut lib = module("@@//l:l", &["@@//a/m:m"]);
+        lib.class_jars = vec!["bazel-out/k8/bin/l/l.jar".into()];
+        let w = World {
+            targets: vec![
+                module("@@//a:a", &["@@//l:l"]),
+                lib,
+                module("@@//a/m:m", &[]),
+            ],
+            ctx: c,
+        };
+        let a = w.deps_of("@@//a:a");
+        assert_eq!(a.modules, ["fixture.a.m.m"]);
+        assert_eq!(a.libraries, ["@@//l:l"]);
     }
 
     #[test]

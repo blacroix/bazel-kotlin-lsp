@@ -25,10 +25,23 @@ pub struct Module {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Dependency {
-    Module { name: String, scope: String },
-    Library { name: String, scope: String },
+    Module {
+        name: String,
+        scope: String,
+        #[serde(rename = "isExported")]
+        is_exported: bool,
+    },
+    Library {
+        name: String,
+        scope: String,
+        #[serde(rename = "isExported")]
+        is_exported: bool,
+    },
     ModuleSource,
-    Sdk { name: String, kind: String },
+    Sdk {
+        name: String,
+        kind: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

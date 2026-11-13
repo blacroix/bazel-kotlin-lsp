@@ -1,0 +1,18 @@
+[package]
+name = "bkl-synth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "bkl-synth"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+bkl-probe = { path = "../bkl-probe" }
+clap.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

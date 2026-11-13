@@ -11,32 +11,38 @@ expression: "String::from_utf8(render(&model.workspace)).unwrap()"
         {
           "type": "module",
           "name": "greeting.greeting",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "module",
           "name": "shapes.shapes.shapes",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "library",
           "name": "@@//gen:version",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "library",
           "name": "@@rules_jvm_external++maven+maven//:org_jetbrains_annotations",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "library",
           "name": "@@rules_jvm_external++maven+maven//:org_jetbrains_kotlinx_kotlinx_serialization_core_jvm",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "library",
           "name": "@@rules_kotlin+//kotlin/compiler:kotlin-stdlib",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "moduleSource"
@@ -78,47 +84,26 @@ expression: "String::from_utf8(render(&model.workspace)).unwrap()"
         {
           "type": "module",
           "name": "fixture.app.app",
-          "scope": "compile"
-        },
-        {
-          "type": "module",
-          "name": "greeting.greeting",
-          "scope": "compile"
-        },
-        {
-          "type": "module",
-          "name": "shapes.shapes.shapes",
-          "scope": "compile"
-        },
-        {
-          "type": "library",
-          "name": "@@//gen:version",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "library",
           "name": "@@rules_jvm_external++maven+maven//:junit_junit",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "library",
           "name": "@@rules_jvm_external++maven+maven//:org_hamcrest_hamcrest_core",
-          "scope": "compile"
-        },
-        {
-          "type": "library",
-          "name": "@@rules_jvm_external++maven+maven//:org_jetbrains_annotations",
-          "scope": "compile"
-        },
-        {
-          "type": "library",
-          "name": "@@rules_jvm_external++maven+maven//:org_jetbrains_kotlinx_kotlinx_serialization_core_jvm",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "library",
           "name": "@@rules_kotlin+//kotlin/compiler:kotlin-stdlib",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "moduleSource"
@@ -149,7 +134,8 @@ expression: "String::from_utf8(render(&model.workspace)).unwrap()"
         {
           "type": "library",
           "name": "@@rules_kotlin+//kotlin/compiler:kotlin-stdlib",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "moduleSource"
@@ -190,7 +176,8 @@ expression: "String::from_utf8(render(&model.workspace)).unwrap()"
         {
           "type": "library",
           "name": "@@rules_kotlin+//kotlin/compiler:kotlin-stdlib",
-          "scope": "compile"
+          "scope": "compile",
+          "isExported": true
         },
         {
           "type": "moduleSource"

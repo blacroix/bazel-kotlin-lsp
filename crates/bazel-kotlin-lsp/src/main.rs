@@ -17,7 +17,7 @@ fn main() -> ExitCode {
                 scope_dirs: args.scope_dir,
                 targets: args.target,
                 shared_output_base: args.shared_output_base,
-                cache_root: None,
+                cache_root: args.cache_root,
                 echo_bazel: true,
             };
             match run_sync(&options) {
