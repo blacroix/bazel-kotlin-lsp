@@ -17,7 +17,7 @@ use crate::workspace_json::{ContentRoot, Dependency, Module, SourceRootJson, Wor
 
 pub use crate::workspace_json::{PLACEHOLDER, render};
 pub use deps::jar_targets;
-pub(crate) use modules::{ModuleGroup, SourceRootEntry, group_modules};
+pub(crate) use modules::{ModuleGroup, group_modules};
 pub use paths::resolve_exec_path;
 pub use roles::{Role, classify, module_name};
 pub use settings::java_major;
