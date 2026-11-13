@@ -64,6 +64,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bkl-core",
+ "bkl-probe",
  "clap",
  "serde",
  "serde_json",
@@ -88,6 +89,25 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+ "url",
+]
+
+[[package]]
+name = "bkl-lsp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "bkl-probe"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bkl-lsp",
+ "clap",
+ "serde",
+ "serde_json",
  "url",
 ]
 

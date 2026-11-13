@@ -15,5 +15,6 @@ serde_json.workspace = true
 shlex.workspace = true
 
 [dev-dependencies]
+bkl-probe = { path = "../bkl-probe" }
 serde_json.workspace = true
 tempfile.workspace = true

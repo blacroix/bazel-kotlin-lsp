@@ -10,3 +10,26 @@ run = "cargo test"
 
 [tasks.integration]
 run = "cargo test -p bazel-kotlin-lsp --test record_fixture --test sync_fixture -- --ignored --test-threads=1"
+
+[tasks."kotlin-lsp:fetch"]
+description = "Download the pinned kotlin-lsp into .cache/kotlin-lsp"
+run = '''
+set -eu
+v=271.2085.0
+dir=.cache/kotlin-lsp/$v
+bin=$dir/kotlin-server-$v/bin/intellij-server
+if [ -x "$bin" ]; then echo "$PWD/$bin"; exit 0; fi
+case "$(uname -m)" in arm64|aarch64) arch=-aarch64 ;; *) arch= ;; esac
+case "$(uname -s)" in Darwin) ext=sit ;; *) ext=tar.gz ;; esac
+mkdir -p "$dir"
+curl -fsSL -o "$dir/archive.$ext" "https://download.jetbrains.com/language-server/kotlin-server/$v/kotlin-server-$v$arch.$ext"
+if [ "$ext" = sit ]; then ditto -x -k "$dir/archive.$ext" "$dir"; else tar -xzf "$dir/archive.$ext" -C "$dir"; fi
+rm "$dir/archive.$ext"
+test -x "$bin"
+echo "$PWD/$bin"
+'''
+
+[tasks.probe]
+description = "Sync the fixture and probe it with the pinned kotlin-lsp"
+depends = ["kotlin-lsp:fetch"]
+run = "KOTLIN_LSP=$PWD/.cache/kotlin-lsp/271.2085.0/kotlin-server-271.2085.0/bin/intellij-server cargo test -p bazel-kotlin-lsp --test fixture_probe -- --ignored --test-threads=1"

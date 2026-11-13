@@ -1,0 +1,63 @@
+[
+  {
+    "name": "same-module",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "line_contains": "internal fun appInternal",
+    "symbol": "helper",
+    "expect": "app/src/main/kotlin/fixture/app/Helpers.kt"
+  },
+  {
+    "name": "cross-module (Maven layout)",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "line_contains": "import fixture.greeting.Greeter",
+    "symbol": "Greeter",
+    "expect": "modules/greeting/src/main/kotlin/"
+  },
+  {
+    "name": "cross-module (Bazel layout)",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "line_contains": "import fixture.shapes.Shape",
+    "symbol": "Shape",
+    "expect": "modules/shapes/shapes/Shape.kt"
+  },
+  {
+    "name": "Kotlin to Java",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "line_contains": "import fixture.greeting.Strings",
+    "symbol": "Strings",
+    "expect": "modules/greeting/src/main/java/"
+  },
+  {
+    "name": "Maven library sources",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "line_contains": "import kotlinx.serialization.SerialName",
+    "symbol": "SerialName",
+    "expect": "-sources.jar"
+  },
+  {
+    "name": "generated-only library",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "line_contains": "import fixture.gen.Version",
+    "symbol": "Version",
+    "expect": "version-sources.jar"
+  },
+  {
+    "name": "generated source in module",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "line_contains": "internal fun appInternal",
+    "symbol": "BuildInfo",
+    "expect": "/bin/app/"
+  },
+  {
+    "name": "associates",
+    "file": "app/src/test/kotlin/fixture/app/AppTest.kt",
+    "line_contains": "appInternal()",
+    "symbol": "appInternal",
+    "expect": "app/src/main/kotlin/fixture/app/App.kt"
+  },
+  {
+    "name": "compiler plugin and opt-in",
+    "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "expect_no_errors": true
+  }
+]

@@ -1,0 +1,19 @@
+[package]
+name = "bkl-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "bkl-probe"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+bkl-lsp = { path = "../bkl-lsp" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true

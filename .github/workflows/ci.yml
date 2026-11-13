@@ -41,3 +41,20 @@ jobs:
             /private/var/tmp/_bazel_*/cache/repos
           key: bazel-repos-${{ runner.os }}-${{ matrix.bazel }}-${{ hashFiles('fixtures/basic/MODULE.bazel') }}
       - run: mise run integration
+
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      USE_BAZEL_VERSION: "9.3.2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: actions/cache@v6
+        with:
+          path: .cache/kotlin-lsp
+          key: kotlin-lsp-271.2085.0-${{ runner.os }}-${{ runner.arch }}
+      - run: mise run probe
