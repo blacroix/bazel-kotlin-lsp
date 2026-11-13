@@ -1,0 +1,12 @@
+[tools]
+rust = "1.99.1"
+bazelisk = "1.30.0"
+
+[tasks.lint]
+run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings"
+
+[tasks.test]
+run = "cargo test"
+
+[tasks.integration]
+run = "cargo test -- --ignored --test-threads=1"
