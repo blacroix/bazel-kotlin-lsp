@@ -118,7 +118,8 @@ fn canonical_label(label: &str, root_mapping: &BTreeMap<String, String>) -> anyh
     Ok(format!("@@{canonical}//{target}"))
 }
 
-/// Target patterns for `bazel build`: positive patterns, then negative ones, then `extra`.
+/// Target patterns for `bazel build`: positive patterns, negative ones, the scope's explicit targets (after the
+/// negatives, so they are never subtracted), then `extra`.
 pub fn target_patterns(scope: &Scope, modules: &[LocalModule], extra: &[String]) -> Vec<String> {
     let nested = |m: &&LocalModule| !m.rel_path.starts_with("..");
     let module_of = |dir: &Path| {
@@ -175,6 +176,7 @@ pub fn target_patterns(scope: &Scope, modules: &[LocalModule], extra: &[String])
     let mut out: Vec<String> = main.into_iter().collect();
     out.extend(in_modules.into_iter().map(|(_, p)| p));
     out.extend(negatives);
+    out.extend(scope.targets.iter().cloned());
     out.extend(extra.iter().cloned());
     let mut seen = BTreeSet::new();
     out.retain(|p| seen.insert(p.clone()));
@@ -277,6 +279,24 @@ mod tests {
         };
         let p = target_patterns(&Scope::whole_repo(), &[far], &[]);
         assert_eq!(p, ["//...", "@@far+//..."]);
+    }
+
+    #[test]
+    fn explicit_targets_are_built_after_negatives() {
+        let s = Scope::from_config(
+            &cfg(&["app", "-app/legacy"], &["//app/legacy:keep"]),
+            &mapping(),
+        )
+        .unwrap();
+        assert_eq!(
+            target_patterns(&s, &mods(), &["@@x//:stdlib".into()]),
+            [
+                "//app/...",
+                "-//app/legacy/...",
+                "@@//app/legacy:keep",
+                "@@x//:stdlib"
+            ]
+        );
     }
 
     #[test]

@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use bazel_kotlin_lsp::sync::SyncOptions;
+
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -88,4 +90,91 @@ fn copy_tree(from: &Path, to: &Path) {
             std::fs::copy(entry.path(), &target).unwrap();
         }
     }
+}
+
+/// A fixture copy plus its own cache root. Dropping it stops the Bazel server of the dedicated output base and
+/// makes Bazel's read-only output tree removable.
+pub struct Synced {
+    pub fixture: tempfile::TempDir,
+    pub cache: tempfile::TempDir,
+}
+
+impl Synced {
+    pub fn new() -> Self {
+        Synced {
+            fixture: fixture_copy(),
+            cache: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    pub fn options(&self) -> SyncOptions {
+        SyncOptions {
+            start_dir: self.fixture.path().to_path_buf(),
+            bazel: Some(bazelisk()),
+            cache_root: Some(self.cache.path().to_path_buf()),
+            ..Default::default()
+        }
+    }
+}
+
+impl Drop for Synced {
+    fn drop(&mut self) {
+        let bases = glob_output_bases(self.cache.path());
+        for base in &bases {
+            let _ = Command::new(bazelisk())
+                .arg(format!("--output_base={}", base.display()))
+                .arg("shutdown")
+                .current_dir(self.fixture.path())
+                .status();
+        }
+        make_writable(self.cache.path());
+    }
+}
+
+fn glob_output_bases(cache: &Path) -> Vec<PathBuf> {
+    let root = cache.join("bazel-kotlin-lsp");
+    std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .map(|e| e.unwrap().path().join("output_base"))
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+fn make_writable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if meta.is_dir() {
+        let _ = std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(meta.permissions().mode() | 0o700),
+        );
+        for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+            make_writable(&entry.path());
+        }
+    }
+}
+
+pub fn workspace_json(out_dir: &Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(out_dir.join("workspace.json")).unwrap()).unwrap()
+}
+
+pub fn module<'a>(ws: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    ws["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == name)
+        .unwrap_or_else(|| panic!("no module {name}"))
+}
+
+pub fn dep_names(module: &serde_json::Value) -> Vec<String> {
+    module["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["name"].as_str().map(str::to_string))
+        .collect()
 }

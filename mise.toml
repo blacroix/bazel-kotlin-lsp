@@ -9,4 +9,4 @@ run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings"
 run = "cargo test"
 
 [tasks.integration]
-run = "cargo test -- --ignored --test-threads=1"
+run = "cargo test -p bazel-kotlin-lsp --test record_fixture --test sync_fixture -- --ignored --test-threads=1"

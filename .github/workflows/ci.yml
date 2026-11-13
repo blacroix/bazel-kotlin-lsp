@@ -17,3 +17,27 @@ jobs:
       - uses: jdx/mise-action@v5
       - run: mise run lint
       - run: mise run test
+
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        bazel: ["8.0.0", "8.8.2", "9.3.2"]
+        include:
+          - bazel: "8.0.0"
+            fixture_versions: rules_kotlin=2.1.0,rules_java=8.6.0,rules_jvm_external=6.6
+    runs-on: ${{ matrix.os }}
+    env:
+      USE_BAZEL_VERSION: ${{ matrix.bazel }}
+      BKL_FIXTURE_VERSIONS: ${{ matrix.fixture_versions }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_*/cache/repos
+            /private/var/tmp/_bazel_*/cache/repos
+          key: bazel-repos-${{ runner.os }}-${{ matrix.bazel }}-${{ hashFiles('fixtures/basic/MODULE.bazel') }}
+      - run: mise run integration

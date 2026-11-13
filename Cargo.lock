@@ -65,6 +65,7 @@ dependencies = [
  "anyhow",
  "bkl-core",
  "clap",
+ "serde",
  "serde_json",
  "shlex",
  "tempfile",
