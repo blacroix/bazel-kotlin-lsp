@@ -9,7 +9,7 @@ pub enum Role {
     Module,
     /// Jars on the classpath: Maven imports, generated-only targets, out-of-scope or external targets.
     Library,
-    /// A JVM target with neither sources nor jars, such as an `exports`-only `java_library`; walked through.
+    /// A JVM target without sources or imported jars, such as an `exports`-only `java_library`; walked through.
     Aggregator,
     Ignored,
 }
@@ -28,7 +28,8 @@ pub fn classify(t: &TargetInfo, ctx: &ModelContext) -> Role {
             return Role::Module;
         }
     }
-    if !t.import_jars.is_empty() || !t.class_jars.is_empty() {
+    let has_sources = !t.srcs.is_empty() || !t.generated_srcs.is_empty();
+    if !t.import_jars.is_empty() || (has_sources && !t.class_jars.is_empty()) {
         return Role::Library;
     }
     Role::Aggregator
@@ -132,6 +133,14 @@ mod tests {
             classify(&target("@@//deps:serialization", "java_library"), &ctx()),
             Role::Aggregator
         );
+    }
+
+    #[test]
+    fn exports_only_library_with_empty_jar_is_aggregator() {
+        let mut t = target("@@//deps:serialization", "java_library");
+        t.class_jars = vec!["bazel-out/k8/bin/deps/libserialization.jar".into()];
+        t.exports = vec!["@@maven//:ser".into()];
+        assert_eq!(classify(&t, &ctx()), Role::Aggregator);
     }
 
     #[test]

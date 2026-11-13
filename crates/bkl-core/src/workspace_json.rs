@@ -107,3 +107,14 @@ pub struct KotlinSettings {
     pub version: u32,
     pub flush_needed: bool,
 }
+
+/// A valid model with nothing in it, for kotlin-lsp to load before the first sync.
+pub const PLACEHOLDER: &str =
+    r#"{"modules":[],"libraries":[],"sdks":[],"kotlinSettings":[],"javaSettings":[]}"#;
+
+/// Pretty JSON with a trailing newline.
+pub fn render(ws: &Workspace) -> Vec<u8> {
+    let mut out = serde_json::to_vec_pretty(ws).expect("plain data serializes");
+    out.push(b'\n');
+    out
+}
