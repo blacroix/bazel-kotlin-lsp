@@ -1,0 +1,34 @@
+{
+  "associates": [
+    "@@shapes+//shapes:shapes"
+  ],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/external/shapes+/shapes/shapes_test.jar"
+  ],
+  "deps": [],
+  "exports": [],
+  "generated_srcs": [],
+  "import_jars": [],
+  "import_srcjar": [],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "kt_jvm_test",
+  "kotlinc": {
+    "api_version": "2.4",
+    "jvm_target": "1.8",
+    "language_version": "2.4",
+    "opt_in": [],
+    "plugin_classpath": [],
+    "plugin_options": []
+  },
+  "label": "@@shapes+//shapes:shapes_test",
+  "name": "shapes_test",
+  "package": "shapes",
+  "repo": "shapes+",
+  "source_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/external/shapes+/shapes/shapes_test-sources.jar"
+  ],
+  "srcs": [
+    "external/shapes+/shapes/ShapeTest.kt"
+  ],
+  "tags": []
+}

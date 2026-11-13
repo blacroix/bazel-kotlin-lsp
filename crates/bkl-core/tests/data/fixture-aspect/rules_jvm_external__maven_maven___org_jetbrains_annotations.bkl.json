@@ -1,0 +1,32 @@
+{
+  "associates": [],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/annotations/13.0/processed_annotations-13.0.jar"
+  ],
+  "deps": [],
+  "exports": [],
+  "generated_srcs": [],
+  "import_jars": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/annotations/13.0/annotations-13.0.jar"
+  ],
+  "import_srcjar": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/annotations/13.0/annotations-13.0-sources.jar"
+  ],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "jvm_import",
+  "kotlinc": null,
+  "label": "@@rules_jvm_external++maven+maven//:org_jetbrains_annotations",
+  "name": "org_jetbrains_annotations",
+  "package": "",
+  "repo": "rules_jvm_external++maven+maven",
+  "source_jars": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/annotations/13.0/annotations-13.0-sources.jar"
+  ],
+  "srcs": [],
+  "tags": [
+    "maven_coordinates=org.jetbrains:annotations:13.0",
+    "maven_repository=https://repo1.maven.org/maven2",
+    "maven_sha256=ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478",
+    "maven_url=https://repo1.maven.org/maven2/org/jetbrains/annotations/13.0/annotations-13.0.jar"
+  ]
+}

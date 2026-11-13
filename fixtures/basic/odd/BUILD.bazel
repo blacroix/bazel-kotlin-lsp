@@ -1,0 +1,18 @@
+load(":rules.bzl", "odd_rule")
+
+filegroup(
+    name = "files",
+    srcs = ["rules.bzl"],
+)
+
+odd_rule(
+    name = "odd",
+    deps = ["not", "labels"],
+    exports = ":files",
+)
+
+genrule(
+    name = "note",
+    outs = ["note.txt"],
+    cmd = "echo note > $@",
+)

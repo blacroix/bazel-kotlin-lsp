@@ -1,0 +1,17 @@
+load("@rules_kotlin//kotlin:jvm.bzl", "kt_jvm_library", "kt_jvm_test")
+
+kt_jvm_library(
+    name = "shapes",
+    srcs = [
+        "Circle.kt",
+        "Shape.kt",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+kt_jvm_test(
+    name = "shapes_test",
+    srcs = ["ShapeTest.kt"],
+    associates = [":shapes"],
+    main_class = "fixture.shapes.ShapeTestKt",
+)

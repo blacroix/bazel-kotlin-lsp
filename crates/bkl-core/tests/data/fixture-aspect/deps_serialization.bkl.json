@@ -1,0 +1,25 @@
+{
+  "associates": [],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/deps/libserialization.jar"
+  ],
+  "deps": [],
+  "exports": [
+    "@@rules_jvm_external++maven+maven//:org_jetbrains_kotlinx_kotlinx_serialization_core_jvm"
+  ],
+  "generated_srcs": [],
+  "import_jars": [],
+  "import_srcjar": [],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "java_library",
+  "kotlinc": null,
+  "label": "@@//deps:serialization",
+  "name": "serialization",
+  "package": "deps",
+  "repo": "",
+  "source_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/deps/libserialization-src.jar"
+  ],
+  "srcs": [],
+  "tags": []
+}

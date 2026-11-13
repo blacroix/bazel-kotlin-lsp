@@ -1,0 +1,34 @@
+{
+  "associates": [],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/processed_kotlin-stdlib-2.2.0.jar"
+  ],
+  "deps": [
+    "@@rules_jvm_external++maven+maven//:org_jetbrains_annotations"
+  ],
+  "exports": [],
+  "generated_srcs": [],
+  "import_jars": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/kotlin-stdlib-2.2.0.jar"
+  ],
+  "import_srcjar": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/kotlin-stdlib-2.2.0-sources.jar"
+  ],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "jvm_import",
+  "kotlinc": null,
+  "label": "@@rules_jvm_external++maven+maven//:org_jetbrains_kotlin_kotlin_stdlib",
+  "name": "org_jetbrains_kotlin_kotlin_stdlib",
+  "package": "",
+  "repo": "rules_jvm_external++maven+maven",
+  "source_jars": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/kotlin-stdlib-2.2.0-sources.jar"
+  ],
+  "srcs": [],
+  "tags": [
+    "maven_coordinates=org.jetbrains.kotlin:kotlin-stdlib:2.2.0",
+    "maven_repository=https://repo1.maven.org/maven2",
+    "maven_sha256=65d12d85a3b865c160db9147851712a64b10dadd68b22eea22a95bf8a8670dca",
+    "maven_url=https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/kotlin-stdlib-2.2.0.jar"
+  ]
+}

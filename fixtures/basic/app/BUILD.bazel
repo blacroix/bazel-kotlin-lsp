@@ -1,0 +1,41 @@
+load("@rules_kotlin//kotlin:core.bzl", "kt_compiler_plugin", "kt_kotlinc_options")
+load("@rules_kotlin//kotlin:jvm.bzl", "kt_jvm_library", "kt_jvm_test")
+
+kt_kotlinc_options(
+    name = "opts",
+    x_optin = ["kotlinx.serialization.ExperimentalSerializationApi"],
+)
+
+kt_compiler_plugin(
+    name = "serialization_plugin",
+    id = "org.jetbrains.kotlinx.serialization",
+    deps = ["@rules_kotlin//kotlin/compiler:kotlinx-serialization-compiler-plugin"],
+)
+
+genrule(
+    name = "build_info",
+    outs = ["BuildInfo.kt"],
+    cmd = "printf 'package fixture.app\\n\\nobject BuildInfo {\\n    const val NAME = \"fixture\"\\n}\\n' > $@",
+)
+
+kt_jvm_library(
+    name = "app",
+    srcs = glob(["src/main/kotlin/**/*.kt"]) + [":build_info"],
+    kotlinc_opts = ":opts",
+    plugins = [":serialization_plugin"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//deps:serialization",
+        "//gen:version",
+        "@greeting",
+        "@shapes//shapes",
+    ],
+)
+
+kt_jvm_test(
+    name = "app_test",
+    srcs = glob(["src/test/kotlin/**/*.kt"]),
+    associates = [":app"],
+    test_class = "fixture.app.AppTest",
+    deps = ["@maven//:junit_junit"],
+)

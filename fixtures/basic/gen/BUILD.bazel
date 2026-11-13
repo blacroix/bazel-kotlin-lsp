@@ -1,0 +1,13 @@
+load("@rules_kotlin//kotlin:jvm.bzl", "kt_jvm_library")
+
+genrule(
+    name = "version_kt",
+    outs = ["Version.kt"],
+    cmd = "printf 'package fixture.gen\\n\\nobject Version {\\n    const val VALUE = \"1.0\"\\n}\\n' > $@",
+)
+
+kt_jvm_library(
+    name = "version",
+    srcs = [":version_kt"],
+    visibility = ["//visibility:public"],
+)

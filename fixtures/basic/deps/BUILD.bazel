@@ -1,0 +1,7 @@
+load("@rules_java//java:java_library.bzl", "java_library")
+
+java_library(
+    name = "serialization",
+    visibility = ["//visibility:public"],
+    exports = ["@maven//:org_jetbrains_kotlinx_kotlinx_serialization_core_jvm"],
+)

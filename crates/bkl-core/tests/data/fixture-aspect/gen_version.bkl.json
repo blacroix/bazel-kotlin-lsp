@@ -1,0 +1,32 @@
+{
+  "associates": [],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/gen/version.jar"
+  ],
+  "deps": [],
+  "exports": [],
+  "generated_srcs": [
+    "bazel-out/darwin_arm64-fastbuild/bin/gen/Version.kt"
+  ],
+  "import_jars": [],
+  "import_srcjar": [],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "kt_jvm_library",
+  "kotlinc": {
+    "api_version": "2.4",
+    "jvm_target": "1.8",
+    "language_version": "2.4",
+    "opt_in": [],
+    "plugin_classpath": [],
+    "plugin_options": []
+  },
+  "label": "@@//gen:version",
+  "name": "version",
+  "package": "gen",
+  "repo": "",
+  "source_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/gen/version-sources.jar"
+  ],
+  "srcs": [],
+  "tags": []
+}

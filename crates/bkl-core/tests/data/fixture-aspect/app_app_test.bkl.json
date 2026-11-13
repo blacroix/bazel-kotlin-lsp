@@ -1,0 +1,36 @@
+{
+  "associates": [
+    "@@//app:app"
+  ],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/app/app_test.jar"
+  ],
+  "deps": [
+    "@@rules_jvm_external++maven+maven//:junit_junit"
+  ],
+  "exports": [],
+  "generated_srcs": [],
+  "import_jars": [],
+  "import_srcjar": [],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "kt_jvm_test",
+  "kotlinc": {
+    "api_version": "2.4",
+    "jvm_target": "1.8",
+    "language_version": "2.4",
+    "opt_in": [],
+    "plugin_classpath": [],
+    "plugin_options": []
+  },
+  "label": "@@//app:app_test",
+  "name": "app_test",
+  "package": "app",
+  "repo": "",
+  "source_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/app/app_test-sources.jar"
+  ],
+  "srcs": [
+    "app/src/test/kotlin/fixture/app/AppTest.kt"
+  ],
+  "tags": []
+}

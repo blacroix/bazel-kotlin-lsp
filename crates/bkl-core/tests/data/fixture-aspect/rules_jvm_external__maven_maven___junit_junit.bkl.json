@@ -1,0 +1,34 @@
+{
+  "associates": [],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/junit/junit/4.13.2/processed_junit-4.13.2.jar"
+  ],
+  "deps": [
+    "@@rules_jvm_external++maven+maven//:org_hamcrest_hamcrest_core"
+  ],
+  "exports": [],
+  "generated_srcs": [],
+  "import_jars": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar"
+  ],
+  "import_srcjar": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2-sources.jar"
+  ],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "jvm_import",
+  "kotlinc": null,
+  "label": "@@rules_jvm_external++maven+maven//:junit_junit",
+  "name": "junit_junit",
+  "package": "",
+  "repo": "rules_jvm_external++maven+maven",
+  "source_jars": [
+    "external/rules_jvm_external++maven+maven/v1/https/repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2-sources.jar"
+  ],
+  "srcs": [],
+  "tags": [
+    "maven_coordinates=junit:junit:4.13.2",
+    "maven_repository=https://repo1.maven.org/maven2",
+    "maven_sha256=8e495b634469d64fb8acfa3495a065cbacc8a0fff55ce1e31007be4c16dc57d3",
+    "maven_url=https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar"
+  ]
+}

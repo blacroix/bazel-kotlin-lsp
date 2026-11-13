@@ -1,0 +1,44 @@
+{
+  "associates": [],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/app/app.jar"
+  ],
+  "deps": [
+    "@@//deps:serialization",
+    "@@//gen:version",
+    "@@greeting+//:greeting",
+    "@@shapes+//shapes:shapes"
+  ],
+  "exports": [],
+  "generated_srcs": [
+    "bazel-out/darwin_arm64-fastbuild/bin/app/BuildInfo.kt"
+  ],
+  "import_jars": [],
+  "import_srcjar": [],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "kt_jvm_library",
+  "kotlinc": {
+    "api_version": "2.4",
+    "jvm_target": "1.8",
+    "language_version": "2.4",
+    "opt_in": [
+      "kotlinx.serialization.ExperimentalSerializationApi"
+    ],
+    "plugin_classpath": [
+      "external/rules_kotlin++rules_kotlin_extensions+com_github_jetbrains_kotlin_git/lib/kotlinx-serialization-compiler-plugin.jar"
+    ],
+    "plugin_options": []
+  },
+  "label": "@@//app:app",
+  "name": "app",
+  "package": "app",
+  "repo": "",
+  "source_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/app/app-sources.jar"
+  ],
+  "srcs": [
+    "app/src/main/kotlin/fixture/app/App.kt",
+    "app/src/main/kotlin/fixture/app/Helpers.kt"
+  ],
+  "tags": []
+}

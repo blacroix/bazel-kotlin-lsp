@@ -1,0 +1,26 @@
+module(name = "fixture")
+
+bazel_dep(name = "rules_kotlin", version = "2.4.21")
+bazel_dep(name = "rules_java", version = "9.9.0")
+bazel_dep(name = "rules_jvm_external", version = "7.2")
+bazel_dep(name = "greeting")
+local_path_override(
+    module_name = "greeting",
+    path = "modules/greeting",
+)
+bazel_dep(name = "shapes")
+local_path_override(
+    module_name = "shapes",
+    path = "modules/shapes",
+)
+
+maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
+maven.install(
+    artifacts = [
+        "org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.9.0",
+        "junit:junit:4.13.2",
+    ],
+    fetch_sources = True,
+    repositories = ["https://repo1.maven.org/maven2"],
+)
+use_repo(maven, "maven")

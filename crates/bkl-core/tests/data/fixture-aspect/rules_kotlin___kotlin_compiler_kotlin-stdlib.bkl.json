@@ -1,0 +1,34 @@
+{
+  "associates": [],
+  "class_jars": [
+    "external/rules_kotlin++rules_kotlin_extensions+com_github_jetbrains_kotlin_git/lib/kotlin-stdlib.jar"
+  ],
+  "deps": [],
+  "exports": [],
+  "generated_srcs": [],
+  "import_jars": [
+    "external/rules_kotlin++rules_kotlin_extensions+com_github_jetbrains_kotlin_git/lib/kotlin-stdlib.jar"
+  ],
+  "import_srcjar": [
+    "external/rules_kotlin++rules_kotlin_extensions+com_github_jetbrains_kotlin_git/lib/kotlin-stdlib-sources.jar"
+  ],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "kt_jvm_import",
+  "kotlinc": {
+    "api_version": "2.4",
+    "jvm_target": "1.8",
+    "language_version": "2.4",
+    "opt_in": [],
+    "plugin_classpath": [],
+    "plugin_options": []
+  },
+  "label": "@@rules_kotlin+//kotlin/compiler:kotlin-stdlib",
+  "name": "kotlin-stdlib",
+  "package": "kotlin/compiler",
+  "repo": "rules_kotlin+",
+  "source_jars": [
+    "external/rules_kotlin++rules_kotlin_extensions+com_github_jetbrains_kotlin_git/lib/kotlin-stdlib-sources.jar"
+  ],
+  "srcs": [],
+  "tags": []
+}
