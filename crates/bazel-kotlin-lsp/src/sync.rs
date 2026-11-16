@@ -123,22 +123,41 @@ impl Timer {
     }
 }
 
-pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
+/// Where a sync of `opts` reads and writes, found without running Bazel.
+#[derive(Debug, Clone)]
+pub struct SyncPaths {
+    pub start_dir: PathBuf,
+    pub root: PathBuf,
+    pub layout: CacheLayout,
+    pub out_dir: PathBuf,
+    pub model_dir: PathBuf,
+    pub log: PathBuf,
+}
+
+#[derive(Debug)]
+pub enum Located {
+    Bzlmod(SyncPaths),
+    /// Not inside a Bazel workspace, or a WORKSPACE-only one.
+    NotBzlmod(SyncError),
+}
+
+/// Finds the workspace root and the cache layout of a sync, without running Bazel or creating folders.
+pub fn locate(opts: &SyncOptions) -> Result<Located, SyncError> {
     let start_dir = std::path::absolute(&opts.start_dir)
         .map(|p| normalize(&p))
         .map_err(|e| SyncError::new(format!("{}: {e}", opts.start_dir.display())))?;
     let root = match find_bazel_root(&start_dir) {
         None => {
-            return Err(SyncError::new(format!(
+            return Ok(Located::NotBzlmod(SyncError::new(format!(
                 "{} is not inside a Bazel workspace",
                 start_dir.display()
-            )));
+            ))));
         }
         Some(BazelRoot::WorkspaceOnly(root)) => {
-            return Err(SyncError::new(format!(
+            return Ok(Located::NotBzlmod(SyncError::new(format!(
                 "{}: WORKSPACE-only repositories are not supported (Bazel 8+ with MODULE.bazel required)",
                 root.display()
-            )));
+            ))));
         }
         Some(BazelRoot::Bzlmod(root)) => root,
     };
@@ -152,7 +171,28 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
         })?;
     let layout = CacheLayout::for_workspace(&cache, &realpath);
     let out_dir = opts.out_dir.clone().unwrap_or_else(|| layout.dir.clone());
-    let log = out_dir.join("sync.log");
+    Ok(Located::Bzlmod(SyncPaths {
+        start_dir,
+        root,
+        layout,
+        model_dir: model_dir(&out_dir),
+        log: out_dir.join("sync.log"),
+        out_dir,
+    }))
+}
+
+pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
+    let SyncPaths {
+        start_dir,
+        root,
+        layout,
+        out_dir,
+        model_dir,
+        log,
+    } = match locate(opts)? {
+        Located::Bzlmod(paths) => paths,
+        Located::NotBzlmod(why) => return Err(why),
+    };
     std::fs::create_dir_all(&out_dir)
         .and_then(|_| std::fs::create_dir_all(&layout.dir))
         .map_err(|e| SyncError::new(format!("{}: {e}", out_dir.display())))?;
@@ -177,7 +217,7 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
         &serde_json::to_vec_pretty(&summary).unwrap_or_default(),
     );
     result.map(|summary| SyncOutcome {
-        model_dir: model_dir(&out_dir),
+        model_dir,
         out_dir,
         summary,
     })
