@@ -1,0 +1,174 @@
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
+
+use bazel_kotlin_lsp::sync::{Located, SyncOptions, locate};
+use serde_json::{Value, json};
+
+fn framed(body: &str) -> Vec<u8> {
+    format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+}
+
+/// `bazel-kotlin-lsp proxy --workspace <dir> --cache-root <dir>/cache -- sh -c <script> <args...>`.
+fn spawn_proxy(dir: &Path, script: &str, args: &[&str]) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_bazel-kotlin-lsp"))
+        .arg("proxy")
+        .arg("--workspace")
+        .arg(dir)
+        .arg("--cache-root")
+        .arg(dir.join("cache"))
+        .arg("--bazel")
+        .arg(dir.join("no-such-bazel"))
+        .args(["--", "sh", "-c", script])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+fn wait_with_timeout(child: &mut Child, timeout: Duration) -> ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("proxy still running after {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn messages(bytes: &[u8]) -> Vec<Value> {
+    let mut r = std::io::Cursor::new(bytes);
+    let mut out = Vec::new();
+    while let Some(msg) = bkl_lsp::read_message(&mut r).unwrap() {
+        out.push(msg);
+    }
+    out
+}
+
+fn model_uri(dir: &Path) -> String {
+    let opts = SyncOptions {
+        start_dir: dir.to_path_buf(),
+        cache_root: Some(dir.join("cache")),
+        ..Default::default()
+    };
+    let Located::Bzlmod(paths) = locate(&opts).unwrap() else {
+        panic!("not Bzlmod")
+    };
+    url::Url::from_file_path(paths.model_dir).unwrap().into()
+}
+
+const RECORD: &str = r#"cat > "$0""#;
+
+#[test]
+fn initialize_options_are_merged() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let rec = dir.join("received");
+    let mut proxy = spawn_proxy(dir, RECORD, &[rec.to_str().unwrap()]);
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "rootUri": "file:///r",
+        "initializationOptions": {"indexDir": "/i", "projects": [{"type": "json", "path": "file:///other"}]}
+    }});
+    let exit = json!({"jsonrpc": "2.0", "method": "exit"});
+    let mut stdin = proxy.stdin.take().unwrap();
+    for msg in [&initialize, &exit] {
+        stdin.write_all(&framed(&msg.to_string())).unwrap();
+    }
+    drop(stdin);
+    assert!(wait_with_timeout(&mut proxy, Duration::from_secs(20)).success());
+
+    let received = messages(&std::fs::read(&rec).unwrap());
+    assert_eq!(received.len(), 2, "{received:#?}");
+    assert_eq!(received[0]["params"]["rootUri"], "file:///r");
+    assert_eq!(
+        received[0]["params"]["initializationOptions"],
+        json!({"indexDir": "/i", "projects": [
+            {"type": "json", "path": "file:///other"},
+            {"type": "json", "path": model_uri(dir)}
+        ]})
+    );
+    assert_eq!(received[1], exit);
+}
+
+#[test]
+fn passthrough_outside_bazel() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    let rec = dir.join("received");
+    let reply = "Content-Length: 9\r\nX-Odd: 1\r\n\r\n{\"id\": 1}";
+    let mut proxy = spawn_proxy(
+        dir,
+        r#"printf '%s' "$1"; cat > "$0""#,
+        &[rec.to_str().unwrap(), reply],
+    );
+    let mut sent = b"Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n".to_vec();
+    sent.extend(framed(
+        r#"{ "id" : 1, "method": "initialize", "params": {"initializationOptions": null} }"#,
+    ));
+    sent.extend(b"not even LSP");
+    let mut stdin = proxy.stdin.take().unwrap();
+    stdin.write_all(&sent).unwrap();
+    drop(stdin);
+    assert!(wait_with_timeout(&mut proxy, Duration::from_secs(20)).success());
+
+    assert_eq!(std::fs::read(&rec).unwrap(), sent);
+    let mut out = Vec::new();
+    proxy.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    assert_eq!(out, reply.as_bytes());
+}
+
+#[test]
+fn child_exit_ends_proxy_with_its_code() {
+    let t = tempfile::tempdir().unwrap();
+    let bazel_repo = t.path().join("bzlmod");
+    let plain = t.path().join("plain");
+    std::fs::create_dir_all(&bazel_repo).unwrap();
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(bazel_repo.join("MODULE.bazel"), "").unwrap();
+    for dir in [&bazel_repo, &plain] {
+        let mut proxy = spawn_proxy(dir, "sleep 0.2; exit 7", &[]);
+        let _stdin_kept_open = proxy.stdin.take();
+        let status = wait_with_timeout(&mut proxy, Duration::from_secs(20));
+        assert_eq!(status.code(), Some(7), "in {}", dir.display());
+    }
+}
+
+fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+#[test]
+fn closing_stdin_stops_a_child_that_ignores_it() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let pid_file: PathBuf = dir.join("pid");
+    let mut proxy = spawn_proxy(
+        dir,
+        r#"echo $$ > "$0"; exec sleep 60"#,
+        &[pid_file.to_str().unwrap()],
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !pid_file.is_file() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    let pid = pid.trim();
+    assert!(alive(pid));
+    drop(proxy.stdin.take());
+    wait_with_timeout(&mut proxy, Duration::from_secs(20));
+    assert!(!alive(pid), "child {pid} outlived the proxy");
+}

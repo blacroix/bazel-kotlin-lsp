@@ -6,6 +6,15 @@ use serde_json::Value;
 
 /// Reads one message. `Ok(None)` at a clean end of stream (before any header).
 pub fn read_message(r: &mut impl BufRead) -> io::Result<Option<Value>> {
+    read_body(r)?
+        .map(|body| {
+            serde_json::from_slice(&body).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        })
+        .transpose()
+}
+
+/// Reads one message's body, byte for byte. `Ok(None)` at a clean end of stream (before any header).
+pub fn read_body(r: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut length = None;
     let mut saw_header = false;
     loop {
@@ -40,16 +49,18 @@ pub fn read_message(r: &mut impl BufRead) -> io::Result<Option<Value>> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing Content-Length"))?;
     let mut body = vec![0; length];
     r.read_exact(&mut body)?;
-    serde_json::from_slice(&body)
-        .map(Some)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    Ok(Some(body))
 }
 
 /// Writes one message and flushes.
 pub fn write_message(w: &mut impl Write, msg: &Value) -> io::Result<()> {
-    let body = serde_json::to_vec(msg)?;
+    write_body(w, &serde_json::to_vec(msg)?)
+}
+
+/// Writes one message body with its header, and flushes.
+pub fn write_body(w: &mut impl Write, body: &[u8]) -> io::Result<()> {
     write!(w, "Content-Length: {}\r\n\r\n", body.len())?;
-    w.write_all(&body)?;
+    w.write_all(body)?;
     w.flush()
 }
 
@@ -103,6 +114,17 @@ mod tests {
     fn truncated_body_is_error() {
         let bytes = b"Content-Length: 50\r\n\r\n{\"id\":1}".to_vec();
         assert!(read_message(&mut Cursor::new(bytes)).is_err());
+    }
+
+    #[test]
+    fn body_bytes_are_kept_as_sent() {
+        let body = r#"{ "z": 1,  "a" : [2] }"#;
+        let mut r = Cursor::new(framed(body));
+        assert_eq!(read_body(&mut r).unwrap().unwrap(), body.as_bytes());
+        assert_eq!(read_body(&mut r).unwrap(), None);
+        let mut out = Vec::new();
+        write_body(&mut out, body.as_bytes()).unwrap();
+        assert_eq!(out, framed(body));
     }
 
     #[test]

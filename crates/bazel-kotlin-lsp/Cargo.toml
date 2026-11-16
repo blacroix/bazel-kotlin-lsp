@@ -8,11 +8,14 @@ publish = false
 
 [dependencies]
 bkl-core = { path = "../bkl-core" }
+bkl-lsp = { path = "../bkl-lsp" }
 anyhow.workspace = true
 clap.workspace = true
+libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 shlex.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 bkl-probe = { path = "../bkl-probe" }

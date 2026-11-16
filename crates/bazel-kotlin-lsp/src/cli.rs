@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::sync::SyncOptions;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "bazel-kotlin-lsp",
@@ -17,6 +19,17 @@ pub struct Cli {
 pub enum Command {
     /// Run the Bazel aspect and write kotlin-lsp's workspace.json.
     Sync(SyncArgs),
+    /// Run kotlin-lsp behind an LSP proxy that keeps workspace.json in sync with Bazel.
+    Proxy(ProxyArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProxyArgs {
+    #[command(flatten)]
+    pub sync: SyncArgs,
+    /// The kotlin-lsp command and its arguments, after `--`.
+    #[arg(last = true, required = true, value_name = "KOTLIN_LSP_COMMAND")]
+    pub command: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -43,6 +56,26 @@ pub struct SyncArgs {
     /// Cache root instead of the platform cache folder (tests and benchmarks).
     #[arg(long, value_name = "DIR", hide = true)]
     pub cache_root: Option<PathBuf>,
+}
+
+impl SyncArgs {
+    pub fn into_options(self, echo_bazel: bool) -> SyncOptions {
+        SyncOptions {
+            start_dir: self.workspace.unwrap_or_else(|| {
+                default_start_dir(
+                    std::env::var_os("PWD"),
+                    std::env::current_dir().unwrap_or_default(),
+                )
+            }),
+            out_dir: self.out,
+            bazel: self.bazel,
+            scope_dirs: self.scope_dir,
+            targets: self.target,
+            shared_output_base: self.shared_output_base,
+            cache_root: self.cache_root,
+            echo_bazel,
+        }
+    }
 }
 
 /// The folder `sync` starts from without `--workspace`: the shell's logical `$PWD` (which keeps a symlinked path)
@@ -77,7 +110,9 @@ mod tests {
             "//tools:gen",
         ])
         .unwrap();
-        let Command::Sync(a) = cli.command;
+        let Command::Sync(a) = cli.command else {
+            panic!("not sync")
+        };
         assert_eq!(a.scope_dir, ["app", "-app/legacy"]);
         assert_eq!(a.target, ["//tools:gen"]);
         assert!(!a.shared_output_base);
@@ -87,7 +122,9 @@ mod tests {
     fn hidden_cache_root_flag_parses() {
         let cli =
             Cli::try_parse_from(["bazel-kotlin-lsp", "sync", "--cache-root", "/tmp/c"]).unwrap();
-        let Command::Sync(a) = cli.command;
+        let Command::Sync(a) = cli.command else {
+            panic!("not sync")
+        };
         assert_eq!(a.cache_root, Some(PathBuf::from("/tmp/c")));
     }
 
@@ -104,6 +141,29 @@ mod tests {
         );
         assert_eq!(default_start_dir(Some(t.path().into()), real.clone()), real);
         assert_eq!(default_start_dir(None, real.clone()), real);
+    }
+
+    #[test]
+    fn proxy_takes_sync_flags_and_the_command_after_dashes() {
+        let cli = Cli::try_parse_from([
+            "bazel-kotlin-lsp",
+            "proxy",
+            "--workspace",
+            "/w",
+            "--scope-dir",
+            "app",
+            "--",
+            "/k/intellij-server",
+            "--stdio",
+        ])
+        .unwrap();
+        let Command::Proxy(p) = cli.command else {
+            panic!("not proxy")
+        };
+        assert_eq!(p.sync.workspace, Some(PathBuf::from("/w")));
+        assert_eq!(p.sync.scope_dir, ["app"]);
+        assert_eq!(p.command, ["/k/intellij-server", "--stdio"]);
+        assert!(Cli::try_parse_from(["bazel-kotlin-lsp", "proxy"]).is_err());
     }
 
     #[test]

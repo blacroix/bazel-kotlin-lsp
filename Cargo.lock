@@ -64,12 +64,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bkl-core",
+ "bkl-lsp",
  "bkl-probe",
  "clap",
+ "libc",
  "serde",
  "serde_json",
  "shlex",
  "tempfile",
+ "url",
 ]
 
 [[package]]
