@@ -4,7 +4,20 @@ use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+/// The folder under the cache root that holds one folder per workspace.
+const CACHE_DIR: &str = "bazel-kotlin-lsp";
+const OWNER_FILE: &str = "owner.json";
+/// Prefix of a workspace folder renamed for deletion; an interrupted deletion leaves it behind.
+pub const TRASH_PREFIX: &str = ".trash-";
+const DAY_SECS: u64 = 24 * 3600;
+/// A cache whose workspace is gone is kept this long after its last use, in case the folder comes back (a drive
+/// that is not mounted, a worktree being re-created).
+const GONE_GRACE_SECS: u64 = 3 * DAY_SECS;
+/// A cache from before owner records is removed once it has not been touched this long.
+const UNOWNED_GRACE_SECS: u64 = 14 * DAY_SECS;
 
 /// `$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS. `None` without an absolute base, so a
 /// missing `HOME` never puts the cache under the current directory.
@@ -36,7 +49,7 @@ impl CacheLayout {
     pub fn for_workspace(cache_root: &Path, root_realpath: &Path) -> Self {
         CacheLayout {
             dir: cache_root
-                .join("bazel-kotlin-lsp")
+                .join(CACHE_DIR)
                 .join(workspace_key(root_realpath)),
         }
     }
@@ -57,9 +70,87 @@ impl CacheLayout {
         self.dir.join("jar-targets.txt")
     }
 
+    /// kotlin-lsp's index for this workspace, kept here so removing the folder removes it too.
+    pub fn kotlin_lsp_index_dir(&self) -> PathBuf {
+        self.dir.join("kotlin-lsp-index")
+    }
+
     pub fn scope_decision_file(&self) -> PathBuf {
         self.dir.join("scope-decision.json")
     }
+}
+
+/// Which workspace a cache folder belongs to; the folder name is only a hash of its path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Owner {
+    pub workspace: PathBuf,
+    /// Seconds since the Unix epoch.
+    pub last_used: u64,
+}
+
+pub fn write_owner(dir: &Path, workspace: &Path, now_secs: u64) -> std::io::Result<()> {
+    let owner = Owner {
+        workspace: workspace.to_path_buf(),
+        last_used: now_secs,
+    };
+    let bytes = serde_json::to_vec_pretty(&owner).map_err(std::io::Error::other)?;
+    write_if_changed(&dir.join(OWNER_FILE), &bytes).map(|_| ())
+}
+
+pub fn read_owner(dir: &Path) -> Option<Owner> {
+    serde_json::from_slice(&std::fs::read(dir.join(OWNER_FILE)).ok()?).ok()
+}
+
+/// Why a cache folder can be removed, or `None` to keep it. `modified_secs` is the folder's own modification time,
+/// used when it has no owner record.
+pub fn staleness(
+    owner: Option<&Owner>,
+    modified_secs: u64,
+    now_secs: u64,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Option<String> {
+    let days = |since: u64| now_secs.saturating_sub(since) / DAY_SECS;
+    match owner {
+        Some(owner) => (!exists(&owner.workspace)
+            && now_secs.saturating_sub(owner.last_used) >= GONE_GRACE_SECS)
+            .then(|| {
+                format!(
+                    "workspace {} is gone, unused for {} days",
+                    owner.workspace.display(),
+                    days(owner.last_used)
+                )
+            }),
+        None => (now_secs.saturating_sub(modified_secs) >= UNOWNED_GRACE_SECS)
+            .then(|| format!("no owner record, unused for {} days", days(modified_secs))),
+    }
+}
+
+/// The workspace folders and the leftover trash folders under the cache root, each sorted.
+pub fn cache_dirs(cache_root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut dirs = Vec::new();
+    let mut trash = Vec::new();
+    for entry in std::fs::read_dir(cache_root.join(CACHE_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(TRASH_PREFIX)
+        {
+            trash.push(path);
+        } else {
+            dirs.push(path);
+        }
+    }
+    dirs.sort();
+    trash.sort();
+    (dirs, trash)
 }
 
 /// Holds `<dir>/sync.lock` exclusively until the returned file is dropped, waiting for any other holder.
@@ -206,5 +297,69 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         assert_eq!(names, ["workspace.json"]);
+    }
+
+    #[test]
+    fn owner_round_trips_and_names_the_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_owner(dir.path()).is_none());
+        write_owner(dir.path(), Path::new("/ws/repo"), 1_000).unwrap();
+        let owner = read_owner(dir.path()).unwrap();
+        assert_eq!(owner.workspace, PathBuf::from("/ws/repo"));
+        assert_eq!(owner.last_used, 1_000);
+    }
+
+    const DAY: u64 = 24 * 3600;
+
+    #[test]
+    fn stale_when_the_workspace_is_gone_and_unused_for_days() {
+        let owner = Owner {
+            workspace: "/ws/gone".into(),
+            last_used: 0,
+        };
+        let gone = |_: &Path| false;
+        let here = |_: &Path| true;
+        let reason = staleness(Some(&owner), 0, 3 * DAY, &gone).unwrap();
+        assert!(reason.contains("/ws/gone"), "{reason}");
+        assert_eq!(
+            staleness(Some(&owner), 0, 2 * DAY, &gone),
+            None,
+            "used recently"
+        );
+        assert_eq!(
+            staleness(Some(&owner), 0, 100 * DAY, &here),
+            None,
+            "workspace exists"
+        );
+    }
+
+    #[test]
+    fn a_cache_without_owner_is_stale_only_after_two_weeks() {
+        let any = |_: &Path| true;
+        assert_eq!(staleness(None, 0, 13 * DAY, &any), None);
+        assert!(staleness(None, 0, 14 * DAY, &any).is_some());
+    }
+
+    #[test]
+    fn cache_dirs_lists_workspaces_and_trash_separately() {
+        let root = tempfile::tempdir().unwrap();
+        let base = root.path().join("bazel-kotlin-lsp");
+        for d in ["aaaa", "bbbb", ".trash-cccc-1"] {
+            std::fs::create_dir_all(base.join(d)).unwrap();
+        }
+        std::fs::write(base.join("stray-file"), "").unwrap();
+        let (dirs, trash) = cache_dirs(root.path());
+        assert_eq!(dirs, [base.join("aaaa"), base.join("bbbb")]);
+        assert_eq!(trash, [base.join(".trash-cccc-1")]);
+        assert_eq!(cache_dirs(&root.path().join("missing")), (vec![], vec![]));
+    }
+
+    #[test]
+    fn layout_has_a_kotlin_lsp_index_folder() {
+        let layout = CacheLayout::for_workspace(Path::new("/c"), Path::new("/ws"));
+        assert_eq!(
+            layout.kotlin_lsp_index_dir(),
+            layout.dir.join("kotlin-lsp-index")
+        );
     }
 }

@@ -473,3 +473,28 @@ fn cancelling_stops_a_running_bazel() {
     let err = result.unwrap_err();
     assert_eq!(err.message, "sync cancelled", "{err}");
 }
+
+#[test]
+fn sync_records_which_workspace_owns_the_cache() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let mut opts = options(&dir);
+    opts.bazel = Some(
+        FakeBazel {
+            build: STDLIB_BUILD,
+            ..Default::default()
+        }
+        .install(&dir),
+    );
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    run_sync(&opts).unwrap();
+    let (dirs, _) = bkl_core::cache::cache_dirs(&dir.join("cache"));
+    assert_eq!(dirs.len(), 1, "{dirs:?}");
+    let owner = bkl_core::cache::read_owner(&dirs[0]).expect("owner.json");
+    assert_eq!(owner.workspace, dir);
+    assert!(owner.last_used >= before, "{owner:?}");
+}

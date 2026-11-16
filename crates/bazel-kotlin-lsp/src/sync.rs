@@ -13,7 +13,9 @@ use bkl_core::bazel_mod::{
     parse_show_repo, rule_repos,
 };
 use bkl_core::bep::aspect_json_files;
-use bkl_core::cache::{CacheLayout, cache_root, digest_hex, lock_exclusive, write_if_changed};
+use bkl_core::cache::{
+    CacheLayout, cache_root, digest_hex, lock_exclusive, write_if_changed, write_owner,
+};
 use bkl_core::model::{ModelContext, RealFs, build_model, jar_targets, render};
 use bkl_core::root::{BazelRoot, find_bazel_root};
 use bkl_core::scope::{
@@ -227,6 +229,8 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
     let _lock = lock_exclusive(&layout.dir)
         .map_err(|e| SyncError::new(format!("locking {}: {e}", layout.dir.display())))?;
     std::fs::write(&log, "").map_err(|e| SyncError::new(format!("{}: {e}", log.display())))?;
+    write_owner(&layout.dir, &root, now_secs())
+        .map_err(|e| SyncError::new(format!("{}: {e}", layout.dir.display())))?;
 
     let mut timer = Timer(BTreeMap::new(), Instant::now());
     let mut result = sync_in(opts, &start_dir, &root, &layout, &out_dir, &log, &mut timer);
@@ -631,4 +635,11 @@ fn write_lines(path: &Path, lines: &[String]) -> Result<(), SyncError> {
     write_if_changed(path, (lines.join("\n") + "\n").as_bytes())
         .map(|_| ())
         .map_err(|e| SyncError::new(format!("{}: {e}", path.display())))
+}
+
+/// Seconds since the Unix epoch.
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
