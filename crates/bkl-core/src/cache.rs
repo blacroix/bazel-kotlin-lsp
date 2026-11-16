@@ -13,8 +13,8 @@ const OWNER_FILE: &str = "owner.json";
 /// Prefix of a workspace folder renamed for deletion; an interrupted deletion leaves it behind.
 pub const TRASH_PREFIX: &str = ".trash-";
 const DAY_SECS: u64 = 24 * 3600;
-/// A cache whose workspace is gone is kept this long after its last use, in case the folder comes back (a drive
-/// that is not mounted, a worktree being re-created).
+/// A cache whose workspace and its parent folder are both missing is kept this long after its last use, in case
+/// they come back (a drive that is not mounted).
 const GONE_GRACE_SECS: u64 = 3 * DAY_SECS;
 /// A cache from before owner records is removed once it has not been touched this long.
 const UNOWNED_GRACE_SECS: u64 = 14 * DAY_SECS;
@@ -111,15 +111,19 @@ pub fn staleness(
 ) -> Option<String> {
     let days = |since: u64| now_secs.saturating_sub(since) / DAY_SECS;
     match owner {
-        Some(owner) => (!exists(&owner.workspace)
-            && now_secs.saturating_sub(owner.last_used) >= GONE_GRACE_SECS)
-            .then(|| {
-                format!(
-                    "workspace {} is gone, unused for {} days",
-                    owner.workspace.display(),
-                    days(owner.last_used)
-                )
-            }),
+        Some(owner) if exists(&owner.workspace) => None,
+        // Its parent folder is there, so the workspace was deleted, not merely unreachable.
+        Some(owner) if owner.workspace.parent().is_some_and(exists) => Some(format!(
+            "workspace {} was deleted",
+            owner.workspace.display()
+        )),
+        Some(owner) => (now_secs.saturating_sub(owner.last_used) >= GONE_GRACE_SECS).then(|| {
+            format!(
+                "workspace {} is unreachable, unused for {} days",
+                owner.workspace.display(),
+                days(owner.last_used)
+            )
+        }),
         None => (now_secs.saturating_sub(modified_secs) >= UNOWNED_GRACE_SECS)
             .then(|| format!("no owner record, unused for {} days", days(modified_secs))),
     }
@@ -330,6 +334,20 @@ mod tests {
             staleness(Some(&owner), 0, 100 * DAY, &here),
             None,
             "workspace exists"
+        );
+    }
+
+    #[test]
+    fn a_deleted_workspace_whose_parent_exists_is_stale_at_once() {
+        let owner = Owner {
+            workspace: "/worktrees/repo/gone".into(),
+            last_used: 10 * DAY,
+        };
+        let parent_only = |p: &Path| p == Path::new("/worktrees/repo");
+        let reason = staleness(Some(&owner), 0, 10 * DAY, &parent_only).unwrap();
+        assert!(
+            reason.contains("deleted") && reason.contains("/worktrees/repo/gone"),
+            "{reason}"
         );
     }
 

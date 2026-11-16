@@ -296,6 +296,15 @@ mod tests {
     }
 
     #[test]
+    fn a_just_deleted_worktree_is_removed_at_once() {
+        let c = Cache::new();
+        let worktrees = tempfile::tempdir().unwrap();
+        let deleted = c.folder("deleted", &worktrees.path().join("old-worktree"), NOW);
+        let entries = gc(&c.options(), NOW).unwrap();
+        assert_eq!(removed(&entries), [deleted.as_path()]);
+    }
+
+    #[test]
     fn dry_run_removes_nothing() {
         let c = Cache::new();
         let stale = c.folder("stale", Path::new("/nonexistent/worktree"), 0);

@@ -88,8 +88,10 @@ and one full indexing, about a minute for a mid-sized service; reopening it is q
 
 ## Cleaning up
 
-A cache folder records which workspace it belongs to. When the proxy starts, it removes the folders of workspaces
-that no longer exist and have not been used for 3 days, stopping their Bazel server first. To do it by hand:
+A cache folder records which workspace it belongs to. When the proxy starts, it removes the folders of deleted
+workspaces, stopping their Bazel server first: a deleted worktree's cache goes the next time any Kotlin project opens.
+A workspace whose parent folder is missing too (an unmounted drive) is only considered gone after 3 days unused. To do
+it by hand:
 
 ```sh
 bazel-kotlin-lsp gc --dry-run              # list what would be removed
