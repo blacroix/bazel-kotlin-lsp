@@ -66,6 +66,7 @@ struct FakeBazel {
     info: &'static str,
     graph: &'static str,
     build: &'static str,
+    query: &'static str,
 }
 
 impl Default for FakeBazel {
@@ -74,6 +75,7 @@ impl Default for FakeBazel {
             info: GOOD_INFO,
             graph: GOOD_GRAPH,
             build: "exit 0",
+            query: "exit 0",
         }
     }
 }
@@ -97,6 +99,7 @@ case "$cmd" in
   info) {info} ;;
   mod) case " $* " in *" graph "*) {graph} ;; *) {mapping} ;; esac ;;
   build) {build} ;;
+  query) {query} ;;
 esac
 "#,
             root = dir.display(),
@@ -104,6 +107,7 @@ esac
             graph = self.graph,
             mapping = GOOD_MAPPING,
             build = self.build,
+            query = self.query,
         );
         let path = dir.join("fake-bazel");
         std::fs::write(&path, script).unwrap();
@@ -342,4 +346,56 @@ fn cli_prints_the_model_folder() {
         std::path::PathBuf::from(printed.trim()),
         dir.join("out/model")
     );
+}
+
+/// Counts its runs in `$ROOT/queries` and reports 501 JVM targets, above the narrowing threshold.
+const BIG_QUERY: &str = r#"echo run >> "$ROOT/queries"
+i=0; while [ $i -lt 501 ]; do echo "//sub:t$i"; i=$((i+1)); done"#;
+
+fn query_runs(dir: &std::path::Path) -> usize {
+    std::fs::read_to_string(dir.join("queries"))
+        .map(|s| s.lines().count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn narrowing_decision_is_reused_until_module_bazel_changes() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    std::fs::create_dir(dir.join("sub")).unwrap();
+    let bazel = FakeBazel {
+        build: STDLIB_BUILD,
+        query: BIG_QUERY,
+        ..Default::default()
+    }
+    .install(&dir);
+    let sync = || {
+        let mut opts = options(&dir);
+        opts.start_dir = dir.join("sub");
+        opts.bazel = Some(bazel.clone());
+        run_sync(&opts).unwrap()
+    };
+
+    let first = sync();
+    assert_eq!(first.summary.scope, "folder sub");
+    assert_eq!(query_runs(&dir), 1);
+    let second = sync();
+    assert_eq!(second.summary.scope, "folder sub");
+    assert_eq!(query_runs(&dir), 1, "the decision should be reused");
+
+    std::fs::write(dir.join("MODULE.bazel"), "# edited\n").unwrap();
+    sync();
+    assert_eq!(
+        query_runs(&dir),
+        2,
+        "an edited MODULE.bazel should re-count"
+    );
+
+    let mut opts = options(&dir);
+    opts.bazel = Some(bazel.clone());
+    assert_eq!(run_sync(&opts).unwrap().summary.scope, "whole repository");
+    opts.scope_dirs = vec!["sub".into()];
+    assert_eq!(run_sync(&opts).unwrap().summary.scope, "flags");
+    assert_eq!(query_runs(&dir), 2);
 }

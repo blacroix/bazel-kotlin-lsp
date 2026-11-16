@@ -18,7 +18,12 @@ pub fn cache_root(env: &dyn Fn(&str) -> Option<String>, macos: bool) -> Option<P
 
 /// First 16 hex characters of the SHA-256 of the workspace root's path.
 pub fn workspace_key(root_realpath: &Path) -> String {
-    let digest = Sha256::digest(root_realpath.as_os_str().as_bytes());
+    digest_hex(root_realpath.as_os_str().as_bytes())
+}
+
+/// First 16 hex characters of the SHA-256 of `bytes`.
+pub fn digest_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
     digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
@@ -50,6 +55,10 @@ impl CacheLayout {
 
     pub fn jar_patterns_file(&self) -> PathBuf {
         self.dir.join("jar-targets.txt")
+    }
+
+    pub fn scope_decision_file(&self) -> PathBuf {
+        self.dir.join("scope-decision.json")
     }
 }
 

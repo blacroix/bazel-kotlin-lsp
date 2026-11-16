@@ -31,8 +31,8 @@ fn main() -> ExitCode {
                     }
                     let change = if s.changed { "updated" } else { "unchanged" };
                     eprintln!(
-                        "{} modules, {} libraries; workspace.json {change} ({})",
-                        s.modules, s.libraries, s.status
+                        "{} modules, {} libraries ({}); workspace.json {change} ({})",
+                        s.modules, s.libraries, s.scope, s.status
                     );
                     println!("{}", outcome.model_dir.display());
                     ExitCode::from(if s.status == "ok" { 0 } else { 3 })

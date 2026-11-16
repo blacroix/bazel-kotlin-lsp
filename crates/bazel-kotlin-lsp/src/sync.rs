@@ -12,7 +12,7 @@ use bkl_core::bazel_mod::{
     parse_show_repo, rule_repos,
 };
 use bkl_core::bep::aspect_json_files;
-use bkl_core::cache::{CacheLayout, cache_root, lock_exclusive, write_if_changed};
+use bkl_core::cache::{CacheLayout, cache_root, digest_hex, lock_exclusive, write_if_changed};
 use bkl_core::model::{ModelContext, RealFs, build_model, jar_targets, render};
 use bkl_core::root::{BazelRoot, find_bazel_root};
 use bkl_core::scope::{
@@ -46,6 +46,8 @@ pub struct SyncSummary {
     pub changed: bool,
     pub modules: usize,
     pub libraries: usize,
+    /// What became source modules: `whole repository`, `folder <dir>`, `flags` or `.bazel-kotlin.toml`.
+    pub scope: String,
     pub warnings: Vec<String>,
     pub timings_ms: BTreeMap<String, u64>,
     pub error: Option<String>,
@@ -255,7 +257,15 @@ fn sync_in(
     let repos = rule_repos(&root_mapping, &graph)?;
     write_aspect(&bazel.aspect_dir, &repos)?;
 
-    let scope = choose_scope(opts, &bazel, start_dir, root, &modules, &root_mapping, log)?;
+    let (scope, scope_description) = choose_scope(
+        opts,
+        &bazel,
+        start_dir,
+        layout,
+        &modules,
+        &root_mapping,
+        log,
+    )?;
     timer.lap("bazel_setup");
 
     let stdlib = format!("@@{}//kotlin/compiler:kotlin-stdlib", repos.rules_kotlin);
@@ -356,6 +366,7 @@ fn sync_in(
         changed,
         modules: model.workspace.modules.len(),
         libraries: model.workspace.libraries.len(),
+        scope: scope_description,
         warnings,
         timings_ms: timer.0.clone(),
         error: None,
@@ -400,15 +411,24 @@ fn discover_local_modules(
     Ok(local_modules(&parse_show_repo(&shown.stdout), root))
 }
 
+/// The narrowing decision for one start folder, reused while the root `MODULE.bazel` is unchanged.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct ScopeDecision {
+    start: String,
+    module_bazel: String,
+    jvm_targets: usize,
+}
+
 fn choose_scope(
     opts: &SyncOptions,
     bazel: &Bazel,
     start_dir: &Path,
-    root: &Path,
+    layout: &CacheLayout,
     modules: &[LocalModule],
     root_mapping: &BTreeMap<String, String>,
     log: &Path,
-) -> Result<Scope, SyncError> {
+) -> Result<(Scope, String), SyncError> {
+    let root = bazel.workspace.as_path();
     if !opts.scope_dirs.is_empty() || !opts.targets.is_empty() {
         let cfg = ScopeConfig {
             directories: opts.scope_dirs.clone(),
@@ -416,19 +436,55 @@ fn choose_scope(
         };
         let cfg = resolve_directories(&cfg, root)
             .map_err(|e| SyncError::new(format!("--scope-dir: {e:#}")))?;
-        return Scope::from_config(&cfg, root_mapping)
-            .map_err(|e| SyncError::new(format!("--target: {e:#}")));
+        let scope = Scope::from_config(&cfg, root_mapping)
+            .map_err(|e| SyncError::new(format!("--target: {e:#}")))?;
+        return Ok((scope, "flags".into()));
     }
     let config_file = root.join(CONFIG_FILE);
     if let Some(cfg) = load_scope_config(&config_file)? {
-        return resolve_directories(&cfg, root)
+        let scope = resolve_directories(&cfg, root)
             .and_then(|cfg| Scope::from_config(&cfg, root_mapping))
-            .map_err(|e| SyncError::new(format!("{}: {e:#}", config_file.display())));
+            .map_err(|e| SyncError::new(format!("{}: {e:#}", config_file.display())))?;
+        return Ok((scope, CONFIG_FILE.into()));
     }
     let rel = start_dir.strip_prefix(root).unwrap_or(Path::new(""));
     if rel.as_os_str().is_empty() {
-        return Ok(Scope::whole_repo());
+        return Ok((Scope::whole_repo(), "whole repository".into()));
     }
+    let key = ScopeDecision {
+        start: rel.to_string_lossy().into_owned(),
+        module_bazel: digest_hex(&std::fs::read(root.join("MODULE.bazel")).unwrap_or_default()),
+        jvm_targets: 0,
+    };
+    let saved = std::fs::read(layout.scope_decision_file())
+        .ok()
+        .and_then(|b| serde_json::from_slice::<ScopeDecision>(&b).ok())
+        .filter(|d| d.start == key.start && d.module_bazel == key.module_bazel);
+    let jvm_targets = match saved {
+        Some(decision) => decision.jvm_targets,
+        None => {
+            let jvm_targets = count_jvm_targets(bazel, modules, log)?;
+            let decision = ScopeDecision { jvm_targets, ..key };
+            write_if_changed(
+                &layout.scope_decision_file(),
+                &serde_json::to_vec_pretty(&decision).unwrap_or_default(),
+            )
+            .map_err(|e| SyncError::new(format!("saving the scope decision: {e}")))?;
+            jvm_targets
+        }
+    };
+    Ok(if jvm_targets > NARROW_THRESHOLD {
+        (Scope::folder(rel), format!("folder {}", rel.display()))
+    } else {
+        (Scope::whole_repo(), "whole repository".into())
+    })
+}
+
+fn count_jvm_targets(
+    bazel: &Bazel,
+    modules: &[LocalModule],
+    log: &Path,
+) -> Result<usize, SyncError> {
     let patterns = target_patterns(&Scope::whole_repo(), modules, &[]);
     let (positive, negative): (Vec<&String>, Vec<&String>) =
         patterns.iter().partition(|p| !p.starts_with('-'));
@@ -453,12 +509,7 @@ fn choose_scope(
             log,
         ));
     }
-    let count = run.stdout.lines().filter(|l| !l.trim().is_empty()).count();
-    Ok(if count > NARROW_THRESHOLD {
-        Scope::folder(rel)
-    } else {
-        Scope::whole_repo()
-    })
+    Ok(run.stdout.lines().filter(|l| !l.trim().is_empty()).count())
 }
 
 fn model_dir(out_dir: &Path) -> PathBuf {
