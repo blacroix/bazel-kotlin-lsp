@@ -2,19 +2,26 @@
 //!
 //! stdout is the editor's LSP channel: nothing but LSP messages may ever be written to it.
 
+mod control;
 pub mod init;
+mod report;
 
 use std::io::{self, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use bkl_core::model::PLACEHOLDER;
 use bkl_lsp::{read_body, write_body};
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 use serde_json::Value;
 
-use crate::sync::{Located, SyncOptions, locate};
+use crate::bazel::Cancel;
+use crate::sync::{Located, Progress, SyncError, SyncOptions, SyncOutcome, locate, run_sync};
+use control::Event;
 
 /// How long the child may run on after the editor closed its input, before it is terminated.
 const CHILD_GRACE: Duration = Duration::from_secs(3);
@@ -32,8 +39,56 @@ pub enum Mode {
 }
 
 pub struct BazelMode {
-    /// File URI of the folder holding `workspace.json`.
-    pub model_uri: String,
+    /// The folder holding `workspace.json`.
+    model_dir: PathBuf,
+    model_uri: String,
+    syncer: Arc<dyn Syncer>,
+}
+
+impl BazelMode {
+    pub fn new(model_dir: PathBuf, syncer: Arc<dyn Syncer>) -> Self {
+        BazelMode {
+            model_uri: file_uri(&model_dir),
+            model_dir,
+            syncer,
+        }
+    }
+}
+
+/// Runs one sync; the proxy runs at most one at a time, off the editor's message path.
+pub trait Syncer: Send + Sync + 'static {
+    fn sync(&self, cancel: &Cancel, progress: &Progress) -> Result<SyncOutcome, SyncError>;
+}
+
+pub struct BazelSyncer(pub SyncOptions);
+
+impl Syncer for BazelSyncer {
+    fn sync(&self, cancel: &Cancel, progress: &Progress) -> Result<SyncOutcome, SyncError> {
+        let mut options = self.0.clone();
+        options.cancel = Some(cancel.clone());
+        options.progress = Some(progress.clone());
+        run_sync(&options)
+    }
+}
+
+/// Writes an empty model unless one exists, so kotlin-lsp can import something before the first sync ends.
+/// Returns whether it wrote.
+pub fn write_placeholder(model_dir: &Path) -> io::Result<bool> {
+    let file = model_dir.join("workspace.json");
+    if file.exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(model_dir)?;
+    let tmp = model_dir.join(format!("workspace.json.tmp-{}", std::process::id()));
+    std::fs::write(&tmp, PLACEHOLDER)?;
+    // A hard link never replaces a model that a concurrent sync wrote meanwhile.
+    let linked = std::fs::hard_link(&tmp, &file);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 type Shared<W> = Arc<Mutex<W>>;
@@ -45,9 +100,10 @@ pub fn log(message: &str) {
 /// Runs the proxy on stdin and stdout; returns the exit code.
 pub fn run(opts: ProxyOptions) -> i32 {
     let mode = match locate(&opts.sync) {
-        Ok(Located::Bzlmod(paths)) => Mode::Bazel(BazelMode {
-            model_uri: file_uri(&paths.model_dir),
-        }),
+        Ok(Located::Bzlmod(paths)) => Mode::Bazel(BazelMode::new(
+            paths.model_dir,
+            Arc::new(BazelSyncer(opts.sync)),
+        )),
         Ok(Located::NotBzlmod(why)) => {
             log(&format!("{why}; passing messages through unchanged"));
             Mode::PassThrough
@@ -75,6 +131,14 @@ where
     let (program, args) = command
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no kotlin-lsp command"))?;
+    if let Mode::Bazel(bazel) = &mode
+        && let Err(e) = write_placeholder(&bazel.model_dir)
+    {
+        log(&format!(
+            "writing a placeholder model in {}: {e}",
+            bazel.model_dir.display()
+        ));
+    }
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
@@ -87,23 +151,32 @@ where
     let (closed_tx, closed_rx) = mpsc::channel();
     let client_out: Shared<W> = Arc::new(Mutex::new(client_out));
 
-    match mode {
+    let control = match mode {
         Mode::PassThrough => {
             std::thread::spawn(move || {
                 copy_flushing(client_in, child_in);
                 let _ = closed_tx.send(());
             });
             std::thread::spawn(move || copy_flushing(child_out, Locked(client_out)));
+            None
         }
         Mode::Bazel(bazel) => {
+            let (events, handle) = control::spawn(bazel.syncer.clone(), client_out.clone());
+            let to_control = events.clone();
             std::thread::spawn(move || {
-                pump_client(client_in, child_in, &bazel);
+                pump_client(client_in, child_in, &bazel.model_uri, &to_control);
                 let _ = closed_tx.send(());
             });
             std::thread::spawn(move || pump_child(child_out, &client_out));
+            Some((events, handle))
         }
+    };
+    let status = wait_child(&mut child, &closed_rx);
+    if let Some((events, handle)) = control {
+        let _ = events.send(Event::Stop);
+        let _ = handle.join();
     }
-    Ok(exit_code(wait_child(&mut child, &closed_rx)))
+    Ok(exit_code(status))
 }
 
 /// Copies bytes as they arrive, flushing each chunk, until either side closes.
@@ -136,9 +209,16 @@ impl<W: Write> Write for Locked<W> {
 #[derive(Deserialize)]
 struct Envelope {
     method: Option<String>,
+    id: Option<Value>,
+    error: Option<IgnoredAny>,
 }
 
-fn pump_client(client_in: impl Read, mut child_in: ChildStdin, bazel: &BazelMode) {
+fn pump_client(
+    client_in: impl Read,
+    mut child_in: ChildStdin,
+    model_uri: &str,
+    control: &Sender<Event>,
+) {
     let mut reader = BufReader::new(client_in);
     loop {
         let body = match read_body(&mut reader) {
@@ -149,27 +229,50 @@ fn pump_client(client_in: impl Read, mut child_in: ChildStdin, bazel: &BazelMode
                 return;
             }
         };
-        let body = from_client(body, bazel);
+        let Some(body) = from_client(body, model_uri, control) else {
+            continue;
+        };
         if write_body(&mut child_in, &body).is_err() {
             return;
         }
     }
 }
 
-fn from_client(body: Vec<u8>, bazel: &BazelMode) -> Vec<u8> {
+/// What to forward to kotlin-lsp for one client message; `None` for replies to the proxy's own requests.
+fn from_client(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Option<Vec<u8>> {
     let Ok(envelope) = serde_json::from_slice::<Envelope>(&body) else {
-        return body;
+        return Some(body);
     };
-    if envelope.method.as_deref() != Some("initialize") {
-        return body;
+    match (envelope.method.as_deref(), &envelope.id) {
+        (None, Some(Value::String(id))) if id.starts_with("bkl-") => {
+            let _ = control.send(Event::Response {
+                id: id.clone(),
+                ok: envelope.error.is_none(),
+            });
+            None
+        }
+        (Some("initialize"), _) => Some(initialize(body, model_uri, control)),
+        (Some("initialized"), _) => {
+            let _ = control.send(Event::Initialized);
+            Some(body)
+        }
+        _ => Some(body),
     }
+}
+
+fn initialize(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Vec<u8> {
     let Ok(mut msg) = serde_json::from_slice::<Value>(&body) else {
         return body;
     };
+    let work_done_progress = msg
+        .pointer("/params/capabilities/window/workDoneProgress")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let _ = control.send(Event::Initialize { work_done_progress });
     let Some(params) = msg.get_mut("params") else {
         return body;
     };
-    if !init::inject_project(params, &bazel.model_uri) {
+    if !init::inject_project(params, model_uri) {
         log("initializationOptions is not an object; kotlin-lsp will not see the Bazel model");
         return body;
     }
@@ -220,7 +323,7 @@ fn exit_code(status: ExitStatus) -> i32 {
         .unwrap_or(1)
 }
 
-pub fn file_uri(path: &std::path::Path) -> String {
+pub fn file_uri(path: &Path) -> String {
     url::Url::from_file_path(path)
         .map(String::from)
         .unwrap_or_else(|_| format!("file://{}", path.display()))
