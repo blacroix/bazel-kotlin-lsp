@@ -30,6 +30,8 @@ const DEBOUNCE: Duration = Duration::from_secs(2);
 /// How long the child may run on after the editor closed its input, before it is terminated.
 const CHILD_GRACE: Duration = Duration::from_secs(3);
 const CHILD_KILL_AFTER: Duration = Duration::from_secs(2);
+/// How long the child's last output may take to reach the editor after the child exited.
+const DRAIN_WAIT: Duration = Duration::from_secs(5);
 
 pub struct ProxyOptions {
     pub sync: SyncOptions,
@@ -167,6 +169,7 @@ where
     let child_in = child.stdin.take().expect("piped");
     let child_out = child.stdout.take().expect("piped");
     let (closed_tx, closed_rx) = mpsc::channel();
+    let (drained_tx, drained_rx) = mpsc::channel::<()>();
     let client_out: Shared<W> = Arc::new(Mutex::new(client_out));
 
     let control = match mode {
@@ -175,7 +178,10 @@ where
                 copy_flushing(client_in, child_in);
                 let _ = closed_tx.send(());
             });
-            std::thread::spawn(move || copy_flushing(child_out, Locked(client_out)));
+            std::thread::spawn(move || {
+                copy_flushing(child_out, Locked(client_out));
+                drop(drained_tx);
+            });
             None
         }
         Mode::Bazel(mut bazel) => {
@@ -186,11 +192,15 @@ where
                 pump_client(client_in, child_in, &bazel.model_uri, &to_control);
                 let _ = closed_tx.send(());
             });
-            std::thread::spawn(move || pump_child(child_out, &client_out));
+            std::thread::spawn(move || {
+                pump_child(child_out, &client_out);
+                drop(drained_tx);
+            });
             Some((events, handle))
         }
     };
     let status = wait_child(&mut child, &closed_rx);
+    let _ = drained_rx.recv_timeout(DRAIN_WAIT);
     if let Some((events, handle)) = control {
         let _ = events.send(Event::Stop);
         let _ = handle.join();

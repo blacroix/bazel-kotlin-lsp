@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use bazel_kotlin_lsp::proxy::{BazelMode, Mode, serve};
 use bazel_kotlin_lsp::sync::{Located, SyncOptions, locate};
 use serde_json::{Value, json};
 
@@ -171,4 +172,50 @@ fn closing_stdin_stops_a_child_that_ignores_it() {
     drop(proxy.stdin.take());
     wait_with_timeout(&mut proxy, Duration::from_secs(20));
     assert!(!alive(pid), "child {pid} outlived the proxy");
+}
+
+/// An editor that takes its time reading.
+#[derive(Clone, Default)]
+struct SlowEditor(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Write for SlowEditor {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::thread::sleep(Duration::from_millis(100));
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn output_written_just_before_exit_reaches_the_editor() {
+    let reply = framed(r#"{"jsonrpc":"2.0","id":1,"result":null}"#);
+    let t = tempfile::tempdir().unwrap();
+    let modes = || {
+        let syncer = std::sync::Arc::new(bazel_kotlin_lsp::proxy::BazelSyncer(SyncOptions {
+            start_dir: t.path().into(),
+            bazel: Some(t.path().join("no-such-bazel")),
+            cache_root: Some(t.path().join("cache")),
+            ..Default::default()
+        }));
+        [
+            Mode::PassThrough,
+            Mode::Bazel(BazelMode::new(t.path().join("model"), syncer)),
+        ]
+    };
+    for mode in modes() {
+        let editor = SlowEditor::default();
+        let (client_r, _to_proxy) = std::io::pipe().unwrap();
+        let command: Vec<String> = ["sh", "-c", r#"printf '%s' "$0""#]
+            .into_iter()
+            .map(String::from)
+            .chain([String::from_utf8(reply.clone()).unwrap()])
+            .collect();
+        let code = serve(client_r, editor.clone(), &command, mode).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(*editor.0.lock().unwrap(), reply);
+    }
 }
