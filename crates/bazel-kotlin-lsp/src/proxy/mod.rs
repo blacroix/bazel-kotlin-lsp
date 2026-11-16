@@ -5,6 +5,8 @@
 mod control;
 pub mod init;
 mod report;
+mod schedule;
+mod watch;
 
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,6 +24,8 @@ use serde_json::Value;
 use crate::bazel::Cancel;
 use crate::sync::{Located, Progress, SyncError, SyncOptions, SyncOutcome, locate, run_sync};
 use control::Event;
+
+const DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// How long the child may run on after the editor closed its input, before it is terminated.
 const CHILD_GRACE: Duration = Duration::from_secs(3);
@@ -43,6 +47,13 @@ pub struct BazelMode {
     model_dir: PathBuf,
     model_uri: String,
     syncer: Arc<dyn Syncer>,
+    watch: Option<WatchSpec>,
+}
+
+pub struct WatchSpec {
+    pub root: PathBuf,
+    /// Quiet time after the last relevant change before a sync starts.
+    pub debounce: Duration,
 }
 
 impl BazelMode {
@@ -51,7 +62,14 @@ impl BazelMode {
             model_uri: file_uri(&model_dir),
             model_dir,
             syncer,
+            watch: None,
         }
+    }
+
+    /// Re-syncs after build file changes under `root` and the local modules.
+    pub fn with_watch(mut self, root: PathBuf, debounce: Duration) -> Self {
+        self.watch = Some(WatchSpec { root, debounce });
+        self
     }
 }
 
@@ -100,10 +118,10 @@ pub fn log(message: &str) {
 /// Runs the proxy on stdin and stdout; returns the exit code.
 pub fn run(opts: ProxyOptions) -> i32 {
     let mode = match locate(&opts.sync) {
-        Ok(Located::Bzlmod(paths)) => Mode::Bazel(BazelMode::new(
-            paths.model_dir,
-            Arc::new(BazelSyncer(opts.sync)),
-        )),
+        Ok(Located::Bzlmod(paths)) => Mode::Bazel(
+            BazelMode::new(paths.model_dir, Arc::new(BazelSyncer(opts.sync)))
+                .with_watch(paths.root, DEBOUNCE),
+        ),
         Ok(Located::NotBzlmod(why)) => {
             log(&format!("{why}; passing messages through unchanged"));
             Mode::PassThrough
@@ -160,8 +178,9 @@ where
             std::thread::spawn(move || copy_flushing(child_out, Locked(client_out)));
             None
         }
-        Mode::Bazel(bazel) => {
-            let (events, handle) = control::spawn(bazel.syncer.clone(), client_out.clone());
+        Mode::Bazel(mut bazel) => {
+            let (events, handle) =
+                control::spawn(bazel.syncer.clone(), bazel.watch.take(), client_out.clone());
             let to_control = events.clone();
             std::thread::spawn(move || {
                 pump_client(client_in, child_in, &bazel.model_uri, &to_control);

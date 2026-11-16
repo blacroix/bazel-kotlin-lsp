@@ -163,6 +163,7 @@ fn outcome(status: &str, partial_reason: Option<SyncError>) -> SyncOutcome {
             log: "/c/sync.log".into(),
             ..Default::default()
         },
+        ..Default::default()
     }
 }
 

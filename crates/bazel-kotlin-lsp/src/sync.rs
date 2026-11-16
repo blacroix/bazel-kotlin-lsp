@@ -80,13 +80,15 @@ pub struct SyncSummary {
     pub log: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SyncOutcome {
     /// Logs, build events and the summary.
     pub out_dir: PathBuf,
     /// Holds `workspace.json` alone: the folder kotlin-lsp's `projects` option points at.
     pub model_dir: PathBuf,
     pub summary: SyncSummary,
+    /// Folders of the `local_path_override` modules.
+    pub local_module_dirs: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -232,7 +234,7 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
         result = Err(SyncError::new("sync cancelled"));
     }
     let summary = match &result {
-        Ok(summary) => summary.clone(),
+        Ok((summary, _)) => summary.clone(),
         Err(e) => SyncSummary {
             status: "failed".into(),
             error: Some(e.to_string()),
@@ -245,10 +247,11 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
         &out_dir.join("sync-summary.json"),
         &serde_json::to_vec_pretty(&summary).unwrap_or_default(),
     );
-    result.map(|summary| SyncOutcome {
+    result.map(|(summary, local_module_dirs)| SyncOutcome {
         model_dir,
         out_dir,
         summary,
+        local_module_dirs,
     })
 }
 
@@ -260,7 +263,7 @@ fn sync_in(
     out_dir: &Path,
     log: &Path,
     timer: &mut Timer,
-) -> Result<SyncSummary, SyncError> {
+) -> Result<(SyncSummary, Vec<PathBuf>), SyncError> {
     let phase = |name: &str| {
         if let Some(progress) = &opts.progress {
             progress.report(name);
@@ -398,6 +401,7 @@ fn sync_in(
     timer.lap("aspect_build");
 
     let targets = read_targets(&files.local)?;
+    let local_module_dirs = modules.iter().map(|m| m.abs_path.clone()).collect();
     let ctx = ModelContext {
         workspace_root: root.to_path_buf(),
         execution_root: PathBuf::from(execution_root),
@@ -449,7 +453,7 @@ fn sync_in(
     .map_err(|e| SyncError::new(format!("writing workspace.json: {e}")))?;
     timer.lap("write");
 
-    Ok(SyncSummary {
+    let summary = SyncSummary {
         status: if outcome == BuildOutcome::Full {
             "ok"
         } else {
@@ -465,7 +469,8 @@ fn sync_in(
         error: None,
         partial_reason,
         log: log.to_path_buf(),
-    })
+    };
+    Ok((summary, local_module_dirs))
 }
 
 /// Turns a failure to read a Bazel command's output into an error that names the command and the log.
