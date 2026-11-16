@@ -29,5 +29,7 @@ output base sit next to it. Point kotlin-lsp at that folder with the initializat
 `sync` runs Bazel with its own output base under the cache folder (`~/Library/Caches/bazel-kotlin-lsp` on macOS,
 `~/.cache/bazel-kotlin-lsp` on Linux), so it never invalidates the analysis cache of your own builds. Downloads are
 shared through Bazel's repository cache. Expect a few hundred MB of disk per repository (about 600 MB for a
-28-module service with 240 Maven libraries) and one extra Bazel server (about 500 MB of RAM while it runs). Pass
-`--shared-output-base` to use your own output base instead.
+28-module service with 240 Maven libraries) and one extra Bazel server (about 500 MB of RAM). Like any Bazel server,
+it stays up for up to 3 hours after the last sync; to stop it sooner, run
+`bazel --output_base=<printed folder>/../output_base shutdown` in your repository. Pass `--shared-output-base` to use
+your own output base instead.
