@@ -3,8 +3,11 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, bail};
 use bkl_core::aspect_template::{ASPECT, ASPECT_REPO};
@@ -22,6 +25,53 @@ pub struct Bazel {
     pub log: PathBuf,
     /// Also copy Bazel's stderr to ours (for the CLI).
     pub echo: bool,
+    /// Runs each command in its own process group, so that cancelling interrupts it.
+    pub cancel: Option<Cancel>,
+}
+
+/// Stops a sync's Bazel commands: interrupts the running one and refuses to start more.
+#[derive(Debug, Clone, Default)]
+pub struct Cancel(Arc<CancelState>);
+
+#[derive(Debug, Default)]
+struct CancelState {
+    cancelled: AtomicBool,
+    running: Mutex<Vec<u32>>,
+}
+
+impl Cancel {
+    pub fn cancel(&self) {
+        self.0.cancelled.store(true, Ordering::SeqCst);
+        for &pid in self.0.running.lock().unwrap().iter() {
+            interrupt_group(pid);
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn track(&self, pid: u32) -> Tracked<'_> {
+        self.0.running.lock().unwrap().push(pid);
+        if self.is_cancelled() {
+            interrupt_group(pid);
+        }
+        Tracked(self, pid)
+    }
+}
+
+struct Tracked<'a>(&'a Cancel, u32);
+
+impl Drop for Tracked<'_> {
+    fn drop(&mut self) {
+        self.0.0.running.lock().unwrap().retain(|&p| p != self.1);
+    }
+}
+
+/// SIGINT to the whole group, as a terminal's Ctrl-C would: the Bazel client then cancels its command.
+fn interrupt_group(pid: u32) {
+    // SAFETY: kill(2) has no memory-safety preconditions.
+    unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGINT) };
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +156,15 @@ impl Bazel {
         args
     }
 
+    fn check_cancelled(&self) -> anyhow::Result<()> {
+        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+            bail!("sync cancelled");
+        }
+        Ok(())
+    }
+
     pub fn version(&self) -> anyhow::Result<Option<BazelVersion>> {
+        self.check_cancelled()?;
         let out = Command::new(&self.binary)
             .arg("--version")
             .current_dir(&self.workspace)
@@ -124,6 +182,7 @@ impl Bazel {
 
     /// Runs one Bazel command in the workspace, appending the command line and all of stderr to the log.
     pub fn run(&self, command: &str, args: &[String]) -> anyhow::Result<BazelRun> {
+        self.check_cancelled()?;
         let argv = self.argv(command, args);
         let command_line = shlex::try_join(
             std::iter::once(self.binary.to_string_lossy().as_ref())
@@ -137,14 +196,20 @@ impl Bazel {
             .with_context(|| format!("opening {}", self.log.display()))?;
         writeln!(log, "$ {command_line}")?;
 
-        let mut child = Command::new(&self.binary)
+        let mut command = Command::new(&self.binary);
+        command
             .args(&argv)
             .current_dir(&self.workspace)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        if self.cancel.is_some() {
+            command.process_group(0);
+        }
+        let mut child = command
             .spawn()
             .with_context(|| format!("starting {}", self.binary.display()))?;
+        let _tracked = self.cancel.as_ref().map(|c| c.track(child.id()));
         let mut stdout = child.stdout.take().expect("piped");
         let reader = std::thread::spawn(move || {
             let mut buf = String::new();
@@ -186,6 +251,7 @@ mod tests {
             aspect_dir: "/c/aspect".into(),
             log: "/c/sync.log".into(),
             echo: false,
+            cancel: None,
         }
     }
 

@@ -74,6 +74,8 @@ impl SyncArgs {
             shared_output_base: self.shared_output_base,
             cache_root: self.cache_root,
             echo_bazel,
+            cancel: None,
+            progress: None,
         }
     }
 }

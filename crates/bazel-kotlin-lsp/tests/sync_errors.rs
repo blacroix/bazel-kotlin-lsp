@@ -275,6 +275,13 @@ printf '%s\n' '{"label":"@@rules_kotlin+//kotlin/compiler:kotlin-stdlib","repo":
 printf '{"namedSetOfFiles":{"files":[{"name":"kotlin-stdlib.bkl.json","uri":"file://%s/ob/out/kotlin-stdlib.bkl.json"}]}}\n' "$ROOT" > "$BEP"
 exit 0"#;
 
+/// [`STDLIB_BUILD`]'s output from a `--keep_going` build where another target failed.
+const PARTIAL_STDLIB_BUILD: &str = r#"mkdir -p "$ROOT/ob/out"
+printf '%s\n' '{"label":"@@rules_kotlin+//kotlin/compiler:kotlin-stdlib","repo":"rules_kotlin+","package":"kotlin/compiler","name":"kotlin-stdlib","kind":"kt_jvm_import","import_jars":["external/rules_kotlin+/stdlib.jar"]}' > "$ROOT/ob/out/kotlin-stdlib.bkl.json"
+printf '{"namedSetOfFiles":{"files":[{"name":"kotlin-stdlib.bkl.json","uri":"file://%s/ob/out/kotlin-stdlib.bkl.json"}]}}\n' "$ROOT" > "$BEP"
+echo 'ERROR: /ws/broken/BUILD.bazel:3:1: fake compile failure' >&2
+exit 1"#;
+
 fn names_in(dir: &std::path::Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
@@ -398,4 +405,71 @@ fn narrowing_decision_is_reused_until_module_bazel_changes() {
     opts.scope_dirs = vec!["sub".into()];
     assert_eq!(run_sync(&opts).unwrap().summary.scope, "flags");
     assert_eq!(query_runs(&dir), 2);
+}
+
+#[test]
+fn partial_sync_records_the_failed_build() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let fake = FakeBazel {
+        build: PARTIAL_STDLIB_BUILD,
+        ..Default::default()
+    };
+    let mut opts = options(&dir);
+    opts.bazel = Some(fake.install(&dir));
+    let outcome = run_sync(&opts).unwrap();
+    assert_eq!(outcome.summary.status, "partial");
+    let reason = outcome
+        .summary
+        .partial_reason
+        .expect("a partial sync says why");
+    assert!(
+        reason
+            .command
+            .as_deref()
+            .unwrap_or_default()
+            .contains(" build "),
+        "{reason:?}"
+    );
+    assert!(
+        reason
+            .stderr_tail
+            .iter()
+            .any(|l| l.contains("fake compile failure")),
+        "{reason:?}"
+    );
+    assert_eq!(reason.log, Some(outcome.out_dir.join("sync.log")));
+    let saved = std::fs::read_to_string(outcome.out_dir.join("sync-summary.json")).unwrap();
+    assert!(saved.contains("fake compile failure"), "{saved}");
+}
+
+#[test]
+fn cancelling_stops_a_running_bazel() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let mut opts = options(&dir);
+    opts.bazel = Some(
+        FakeBazel {
+            build: r#"touch "$ROOT/building"; sleep 60"#,
+            ..Default::default()
+        }
+        .install(&dir),
+    );
+    let cancel = bazel_kotlin_lsp::bazel::Cancel::default();
+    opts.cancel = Some(cancel.clone());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(run_sync(&opts)).unwrap());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !dir.join("building").exists() {
+        assert!(std::time::Instant::now() < deadline, "build never started");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    cancel.cancel();
+    let result = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("sync still running 10 s after cancel");
+    let err = result.unwrap_err();
+    assert_eq!(err.message, "sync cancelled", "{err}");
 }

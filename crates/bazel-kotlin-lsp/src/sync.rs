@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use bkl_core::aspect::read_targets;
@@ -21,7 +22,7 @@ use bkl_core::scope::{
 use bkl_core::version::MIN_BAZEL;
 use serde::{Deserialize, Serialize};
 
-use crate::bazel::{Bazel, BazelRun, BuildOutcome, classify_build, resolve_binary};
+use crate::bazel::{Bazel, BazelRun, BuildOutcome, Cancel, classify_build, resolve_binary};
 
 const CONFIG_FILE: &str = ".bazel-kotlin.toml";
 
@@ -37,6 +38,29 @@ pub struct SyncOptions {
     pub cache_root: Option<PathBuf>,
     /// Copy Bazel's stderr to ours.
     pub echo_bazel: bool,
+    /// Lets another thread stop the sync; Bazel then runs in its own process group.
+    pub cancel: Option<Cancel>,
+    pub progress: Option<Progress>,
+}
+
+/// Told the name of each phase a sync enters.
+#[derive(Clone)]
+pub struct Progress(Arc<dyn Fn(&str) + Send + Sync>);
+
+impl Progress {
+    pub fn new(report: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        Progress(Arc::new(report))
+    }
+
+    pub fn report(&self, phase: &str) {
+        (self.0)(phase)
+    }
+}
+
+impl fmt::Debug for Progress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Progress")
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -51,6 +75,8 @@ pub struct SyncSummary {
     pub warnings: Vec<String>,
     pub timings_ms: BTreeMap<String, u64>,
     pub error: Option<String>,
+    /// Why a `partial` sync is partial: the first Bazel build that failed.
+    pub partial_reason: Option<SyncError>,
     pub log: PathBuf,
 }
 
@@ -63,7 +89,7 @@ pub struct SyncOutcome {
     pub summary: SyncSummary,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SyncError {
     pub message: String,
     pub command: Option<String>,
@@ -201,7 +227,10 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
     std::fs::write(&log, "").map_err(|e| SyncError::new(format!("{}: {e}", log.display())))?;
 
     let mut timer = Timer(BTreeMap::new(), Instant::now());
-    let result = sync_in(opts, &start_dir, &root, &layout, &out_dir, &log, &mut timer);
+    let mut result = sync_in(opts, &start_dir, &root, &layout, &out_dir, &log, &mut timer);
+    if result.is_err() && opts.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+        result = Err(SyncError::new("sync cancelled"));
+    }
     let summary = match &result {
         Ok(summary) => summary.clone(),
         Err(e) => SyncSummary {
@@ -232,6 +261,12 @@ fn sync_in(
     log: &Path,
     timer: &mut Timer,
 ) -> Result<SyncSummary, SyncError> {
+    let phase = |name: &str| {
+        if let Some(progress) = &opts.progress {
+            progress.report(name);
+        }
+    };
+    phase("querying Bazel");
     let mut warnings = Vec::new();
     let bazel = Bazel {
         binary: resolve_binary(opts.bazel.as_deref())?,
@@ -240,6 +275,7 @@ fn sync_in(
         aspect_dir: layout.aspect_dir(),
         log: log.to_path_buf(),
         echo: opts.echo_bazel,
+        cancel: opts.cancel.clone(),
     };
     match bazel.version()? {
         Some(v) if v < MIN_BAZEL => {
@@ -311,6 +347,7 @@ fn sync_in(
     let stdlib = format!("@@{}//kotlin/compiler:kotlin-stdlib", repos.rules_kotlin);
     let patterns = target_patterns(&scope, &modules, std::slice::from_ref(&stdlib));
     write_lines(&layout.patterns_file(), &patterns)?;
+    phase("running the aspect");
     let bep = out_dir.join("bep.json");
     let _ = std::fs::remove_file(&bep);
     let build = bazel.run(
@@ -344,6 +381,13 @@ fn sync_in(
         ));
     }
     let mut outcome = classify_build(build.exit_code, files.local.len());
+    let mut partial_reason = (outcome == BuildOutcome::Partial).then(|| {
+        SyncError::bazel(
+            format!("some targets failed to build (exit {})", build.exit_code),
+            &build,
+            log,
+        )
+    });
     if outcome == BuildOutcome::Failed {
         let message = match (build.exit_code, files.local.len()) {
             (0, 0) => "Bazel produced no aspect output".to_string(),
@@ -370,6 +414,7 @@ fn sync_in(
     };
     let jars = jar_targets(&targets, &ctx);
     if !jars.is_empty() {
+        phase("building library jars");
         write_lines(&layout.jar_patterns_file(), &jars)?;
         let run = bazel.run(
             "build",
@@ -377,6 +422,13 @@ fn sync_in(
         )?;
         if run.exit_code != 0 {
             outcome = BuildOutcome::Partial;
+            partial_reason.get_or_insert_with(|| {
+                SyncError::bazel(
+                    format!("building library jars failed (exit {})", run.exit_code),
+                    &run,
+                    log,
+                )
+            });
             warnings.push(format!(
                 "building library jars failed (exit {}); see {}",
                 run.exit_code,
@@ -386,6 +438,7 @@ fn sync_in(
     }
     timer.lap("jar_build");
 
+    phase("writing workspace.json");
     let model = build_model(&targets, &ctx, &RealFs);
     warnings.extend(model.warnings);
     timer.lap("model");
@@ -410,6 +463,7 @@ fn sync_in(
         warnings,
         timings_ms: timer.0.clone(),
         error: None,
+        partial_reason,
         log: log.to_path_buf(),
     })
 }
