@@ -1,7 +1,7 @@
 //! Headless LSP probe: asks go-to-definition (and diagnostics) on known symbols and reports PASS/FAIL per case.
 
 pub mod cases;
-mod client;
+pub mod client;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -113,7 +113,9 @@ pub fn run(args: &ProbeArgs) -> anyhow::Result<Vec<CaseResult>> {
     Ok(results)
 }
 
-fn definition_case(
+/// Asks for the definition every few seconds until a target contains `expect` or `deadline` passes; returns
+/// whether it did and the last targets. A deadline in the past asks once.
+pub fn definition_case(
     client: &Client,
     uri: &str,
     line: u32,
@@ -182,7 +184,7 @@ fn locations(result: &Value) -> Vec<String> {
         .collect()
 }
 
-fn file_uri(path: &Path) -> String {
+pub fn file_uri(path: &Path) -> String {
     url::Url::from_file_path(path)
         .map(String::from)
         .unwrap_or_else(|_| format!("file://{}", path.display()))

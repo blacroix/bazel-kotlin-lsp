@@ -8,6 +8,44 @@ go-to-definition, completion and find-usages work across Bazel modules and into 
 
 ## Usage
 
+### In Zed, through the proxy
+
+`bazel-kotlin-lsp proxy -- <kotlin-lsp command>` runs kotlin-lsp behind a small LSP proxy. In a Bzlmod repository it
+points kotlin-lsp at the generated model and syncs in the background: once when the server starts, then 2 s after
+you stop editing build files (`BUILD`, `MODULE.bazel`, `*.bzl`, `.bazelrc`, `.bazelversion`, `.bazelignore`,
+`.bazel-kotlin.toml`, Maven `*_install.json`). Editing Kotlin files never triggers a sync, and the editor never waits
+for one. kotlin-lsp picks up the new model by itself, without a restart. The sync shows as "Bazel sync" progress; a
+failed sync shows Bazel's error, the command to reproduce it and the log. Outside a Bzlmod repository the proxy passes
+every byte through unchanged, so it is safe to configure globally.
+
+With Zed's Kotlin extension installed and kotlin-lsp 271.2085.0 unpacked (its launcher is
+`kotlin-server-271.2085.0/bin/intellij-server`), add to Zed's `settings.json`:
+
+```json
+{
+  "lsp": {
+    "kotlin-lsp": {
+      "binary": {
+        "path": "/path/to/bazel-kotlin-lsp",
+        "arguments": ["proxy", "--", "/path/to/kotlin-server-271.2085.0/bin/intellij-server", "--stdio"]
+      }
+    }
+  },
+  "languages": {
+    "Kotlin": {
+      "language_servers": ["kotlin-lsp", "!kotlin-language-server", "..."]
+    }
+  }
+}
+```
+
+The proxy finds the repository from the folder the editor starts it in (in Zed, the project folder). `sync`'s flags
+(`--workspace`, `--scope-dir`, `--target`, `--bazel`, `--shared-output-base`) go before `--`. The proxy writes only
+LSP messages to stdout; its own notes and kotlin-lsp's go to stderr (Zed's language server log), and Bazel's output
+goes to `sync.log` in the cache folder.
+
+### On the command line
+
 ```sh
 bazel-kotlin-lsp sync --workspace /path/to/repo
 ```
