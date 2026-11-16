@@ -157,8 +157,8 @@ fn make_writable(path: &Path) {
     }
 }
 
-pub fn workspace_json(out_dir: &Path) -> serde_json::Value {
-    serde_json::from_slice(&std::fs::read(out_dir.join("workspace.json")).unwrap()).unwrap()
+pub fn workspace_json(model_dir: &Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(model_dir.join("workspace.json")).unwrap()).unwrap()
 }
 
 pub fn module<'a>(ws: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {

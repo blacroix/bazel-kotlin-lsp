@@ -62,7 +62,7 @@ fn probe_passes_on_fixture() {
     let s = Synced::new();
     let outcome = run_sync(&s.options()).unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    assert_all_pass(&probe(s.fixture.path(), &outcome.out_dir, scratch.path()));
+    assert_all_pass(&probe(s.fixture.path(), &outcome.model_dir, scratch.path()));
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn probe_passes_through_symlinked_root() {
     options.start_dir = link.clone();
     let outcome = run_sync(&options).unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    assert_all_pass(&probe(&link, &outcome.out_dir, scratch.path()));
+    assert_all_pass(&probe(&link, &outcome.model_dir, scratch.path()));
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn probe_reports_type_errors() {
         format!(r#"[{{"name":"type error","file":"{broken}","expect_no_errors":true}}]"#),
     )
     .unwrap();
-    let mut args = probe_args(s.fixture.path(), &outcome.out_dir, scratch.path());
+    let mut args = probe_args(s.fixture.path(), &outcome.model_dir, scratch.path());
     args.cases = cases;
     args.timeout = Duration::from_secs(90);
     let results = bkl_probe::run(&args).unwrap();

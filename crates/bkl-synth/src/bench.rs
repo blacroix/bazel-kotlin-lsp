@@ -19,6 +19,7 @@ struct Phase {
     wall_ms: u128,
     summary: Value,
     out_dir: PathBuf,
+    model_dir: PathBuf,
 }
 
 fn sync(args: &BenchArgs, cache: &Path) -> anyhow::Result<Phase> {
@@ -38,12 +39,17 @@ fn sync(args: &BenchArgs, cache: &Path) -> anyhow::Result<Phase> {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    let out_dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let model_dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let out_dir = model_dir
+        .parent()
+        .with_context(|| format!("sync printed {}", model_dir.display()))?
+        .to_path_buf();
     let summary = serde_json::from_slice(&std::fs::read(out_dir.join("sync-summary.json"))?)?;
     Ok(Phase {
         wall_ms,
         summary,
         out_dir,
+        model_dir,
     })
 }
 
@@ -152,7 +158,7 @@ pub fn bench(args: &BenchArgs) -> anyhow::Result<Value> {
     add_extra_package(&args.repo)?;
     let incremental = sync(args, cache.path())?;
     let first_definition_ms = match &args.kotlin_lsp {
-        Some(k) => Some(first_definition(args, k, &incremental.out_dir)?),
+        Some(k) => Some(first_definition(args, k, &incremental.model_dir)?),
         None => None,
     };
     shutdown_bazel(&output_base, &args.repo);

@@ -34,7 +34,7 @@ fn main() -> ExitCode {
                         "{} modules, {} libraries; workspace.json {change} ({})",
                         s.modules, s.libraries, s.status
                     );
-                    println!("{}", outcome.out_dir.display());
+                    println!("{}", outcome.model_dir.display());
                     ExitCode::from(if s.status == "ok" { 0 } else { 3 })
                 }
                 Err(e) => {

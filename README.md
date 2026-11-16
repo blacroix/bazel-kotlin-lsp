@@ -12,8 +12,9 @@ go-to-definition, completion and find-usages work across Bazel modules and into 
 bazel-kotlin-lsp sync --workspace /path/to/repo
 ```
 
-`sync` prints the folder holding the generated `workspace.json`. Point kotlin-lsp at it with the initialization
-option `{"projects": [{"type": "json", "path": "file:///that/folder"}]}`. Nothing is written into your repository.
+`sync` prints the folder holding the generated `workspace.json`, and nothing else: logs, build events and Bazel's
+output base sit next to it. Point kotlin-lsp at that folder with the initialization option
+`{"projects": [{"type": "json", "path": "file:///that/folder"}]}`. Nothing is written into your repository.
 
 ## Supported versions
 

@@ -11,7 +11,7 @@ fn sync_fixture_produces_expected_model() {
     let s = Synced::new();
     let outcome = run_sync(&s.options()).unwrap();
     assert_eq!(outcome.summary.status, "ok", "{:?}", outcome.summary);
-    let ws = workspace_json(&outcome.out_dir);
+    let ws = workspace_json(&outcome.model_dir);
 
     let mut names: Vec<&str> = ws["modules"]
         .as_array()
@@ -75,7 +75,7 @@ fn second_sync_is_noop() {
     let s = Synced::new();
     let first = run_sync(&s.options()).unwrap();
     assert!(first.summary.changed);
-    let file = first.out_dir.join("workspace.json");
+    let file = first.model_dir.join("workspace.json");
     let before = std::fs::metadata(&file).unwrap().modified().unwrap();
     let second = run_sync(&s.options()).unwrap();
     assert!(!second.summary.changed);
@@ -107,7 +107,7 @@ fn build_file_edit_changes_model() {
 
     let outcome = run_sync(&s.options()).unwrap();
     assert!(outcome.summary.changed);
-    let ws = workspace_json(&outcome.out_dir);
+    let ws = workspace_json(&outcome.model_dir);
     assert!(
         dep_names(module(&ws, "greeting.greeting")).contains(&"shapes.shapes.shapes".to_string())
     );
@@ -122,7 +122,7 @@ fn broken_target_gives_partial() {
     options.targets = vec!["//broken:broken".into()];
     let outcome = run_sync(&options).unwrap();
     assert_eq!(outcome.summary.status, "partial");
-    module(&workspace_json(&outcome.out_dir), "fixture.app.app");
+    module(&workspace_json(&outcome.model_dir), "fixture.app.app");
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn scope_flag_turns_module_into_library() {
     let mut options = s.options();
     options.scope_dirs = vec!["app".into()];
     let outcome = run_sync(&options).unwrap();
-    let ws = workspace_json(&outcome.out_dir);
+    let ws = workspace_json(&outcome.model_dir);
     assert!(
         ws["modules"]
             .as_array()

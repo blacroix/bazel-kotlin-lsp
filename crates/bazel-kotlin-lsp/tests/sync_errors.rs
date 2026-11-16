@@ -264,3 +264,82 @@ fn unknown_config_directory_names_the_config_file() {
         "{err}"
     );
 }
+
+/// A build that reports one aspect output: the Kotlin stdlib import.
+const STDLIB_BUILD: &str = r#"mkdir -p "$ROOT/ob/out"
+printf '%s\n' '{"label":"@@rules_kotlin+//kotlin/compiler:kotlin-stdlib","repo":"rules_kotlin+","package":"kotlin/compiler","name":"kotlin-stdlib","kind":"kt_jvm_import","import_jars":["external/rules_kotlin+/stdlib.jar"]}' > "$ROOT/ob/out/kotlin-stdlib.bkl.json"
+printf '{"namedSetOfFiles":{"files":[{"name":"kotlin-stdlib.bkl.json","uri":"file://%s/ob/out/kotlin-stdlib.bkl.json"}]}}\n' "$ROOT" > "$BEP"
+exit 0"#;
+
+fn names_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn model_folder_holds_only_workspace_json() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let mut opts = options(&dir);
+    opts.bazel = Some(
+        FakeBazel {
+            build: STDLIB_BUILD,
+            ..Default::default()
+        }
+        .install(&dir),
+    );
+    let outcome = run_sync(&opts).unwrap();
+    assert_eq!(outcome.model_dir, outcome.out_dir.join("model"));
+    assert_eq!(names_in(&outcome.model_dir), ["workspace.json"]);
+    for name in ["sync.log", "bep.json", "sync-summary.json"] {
+        assert!(outcome.out_dir.join(name).is_file(), "{name}");
+    }
+
+    let mut opts = options(&dir);
+    opts.bazel = Some(dir.join("fake-bazel"));
+    let out = dir.join("explicit-out");
+    opts.out_dir = Some(out.clone());
+    let outcome = run_sync(&opts).unwrap();
+    assert_eq!(outcome.model_dir, out.join("model"));
+    assert_eq!(names_in(&outcome.model_dir), ["workspace.json"]);
+}
+
+#[test]
+fn cli_prints_the_model_folder() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let bazel = FakeBazel {
+        build: STDLIB_BUILD,
+        ..Default::default()
+    }
+    .install(&dir);
+    let out = Command::new(env!("CARGO_BIN_EXE_bazel-kotlin-lsp"))
+        .args(["sync", "--workspace"])
+        .arg(&dir)
+        .arg("--bazel")
+        .arg(&bazel)
+        .arg("--out")
+        .arg(dir.join("out"))
+        .arg("--cache-root")
+        .arg(dir.join("cache"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(printed.lines().count(), 1, "{printed}");
+    assert_eq!(
+        std::path::PathBuf::from(printed.trim()),
+        dir.join("out/model")
+    );
+}

@@ -54,7 +54,10 @@ pub struct SyncSummary {
 
 #[derive(Debug, Clone)]
 pub struct SyncOutcome {
+    /// Logs, build events and the summary.
     pub out_dir: PathBuf,
+    /// Holds `workspace.json` alone: the folder kotlin-lsp's `projects` option points at.
+    pub model_dir: PathBuf,
     pub summary: SyncSummary,
 }
 
@@ -171,7 +174,11 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
         &out_dir.join("sync-summary.json"),
         &serde_json::to_vec_pretty(&summary).unwrap_or_default(),
     );
-    result.map(|summary| SyncOutcome { out_dir, summary })
+    result.map(|summary| SyncOutcome {
+        model_dir: model_dir(&out_dir),
+        out_dir,
+        summary,
+    })
 }
 
 fn sync_in(
@@ -332,8 +339,11 @@ fn sync_in(
     let model = build_model(&targets, &ctx, &RealFs);
     warnings.extend(model.warnings);
     timer.lap("model");
-    let changed = write_if_changed(&out_dir.join("workspace.json"), &render(&model.workspace))
-        .map_err(|e| SyncError::new(format!("writing workspace.json: {e}")))?;
+    let changed = write_if_changed(
+        &model_dir(out_dir).join("workspace.json"),
+        &render(&model.workspace),
+    )
+    .map_err(|e| SyncError::new(format!("writing workspace.json: {e}")))?;
     timer.lap("write");
 
     Ok(SyncSummary {
@@ -449,6 +459,10 @@ fn choose_scope(
     } else {
         Scope::whole_repo()
     })
+}
+
+fn model_dir(out_dir: &Path) -> PathBuf {
+    out_dir.join("model")
 }
 
 fn write_aspect(dir: &Path, repos: &RuleRepos) -> Result<(), SyncError> {
