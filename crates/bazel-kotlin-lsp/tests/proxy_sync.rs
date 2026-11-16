@@ -250,22 +250,37 @@ fn failure_shows_message_with_log_path() {
     }))));
     h.assert_quiet();
 
-    h.initialize(false);
+    h.send(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "capabilities": {"window": {"workDoneProgress": false, "showDocument": {"support": true}}}
+    }}));
+    h.send(json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}));
     let shown = h.next();
-    assert_eq!(shown["method"], "window/showMessage", "{shown}");
+    assert_eq!(shown["method"], "window/showMessageRequest", "{shown}");
     assert_eq!(shown["params"]["type"], 1);
+    assert_eq!(shown["params"]["actions"], json!([{"title": "Open log"}]));
     let text = shown["params"]["message"].as_str().unwrap();
     for expected in [
         "Bazel build failed (exit 2)",
         "ERROR: /ws/broken/BUILD.bazel:3:1: no such target '//nope'",
-        "Reproduce: bazelisk build //...",
-        "Log: /c/sync.log",
+        "bazelisk build //...",
+        "/c/sync.log",
     ] {
         assert!(text.contains(expected), "{expected:?} missing from {text}");
     }
     assert!(!text.contains("INFO: Elapsed"), "{text}");
     h.assert_quiet();
-    h.finish();
+
+    h.send(json!({"jsonrpc": "2.0", "id": shown["id"], "result": {"title": "Open log"}}));
+    let open = h.next();
+    assert_eq!(open["method"], "window/showDocument", "{open}");
+    assert_eq!(open["params"]["uri"], "file:///c/sync.log");
+    h.send(json!({"jsonrpc": "2.0", "id": open["id"], "result": {"success": true}}));
+    h.assert_quiet();
+    let (_, received) = h.finish();
+    assert!(
+        received.iter().all(|m| m.get("result").is_none()),
+        "replies to the proxy's prompt and showDocument reach the child: {received:?}"
+    );
 }
 
 #[test]
@@ -282,14 +297,15 @@ fn partial_sync_shows_a_warning_with_its_reason() {
         }),
     )))));
     let shown = h.next();
-    assert_eq!(shown["method"], "window/showMessage", "{shown}");
+    assert_eq!(shown["method"], "window/showMessageRequest", "{shown}");
     assert_eq!(shown["params"]["type"], 2);
+    assert_eq!(shown["params"]["actions"], json!([{"title": "OK"}]));
     let text = shown["params"]["message"].as_str().unwrap();
     for expected in [
         "some targets failed to build",
         "compile failed",
-        "Reproduce: bazelisk build --keep_going",
-        "Log: /c/sync.log",
+        "bazelisk build --keep_going",
+        "/c/sync.log",
     ] {
         assert!(text.contains(expected), "{expected:?} missing from {text}");
     }

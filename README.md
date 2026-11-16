@@ -15,8 +15,9 @@ points kotlin-lsp at the generated model and syncs in the background: once when 
 you stop editing build files (`BUILD`, `MODULE.bazel`, `*.bzl`, `.bazelrc`, `.bazelversion`, `.bazelignore`,
 `.bazel-kotlin.toml`, Maven `*_install.json`). Editing Kotlin files never triggers a sync, and the editor never waits
 for one. kotlin-lsp picks up the new model by itself, without a restart. The sync shows as "Bazel sync" progress; a
-failed sync shows Bazel's error, the command to reproduce it and the log. Outside a Bzlmod repository the proxy passes
-every byte through unchanged, so it is safe to configure globally.
+failed or incomplete sync shows a notification that stays until you close it, with Bazel's error, the command to
+reproduce it and an "Open log" button. The same error is shown once until a sync succeeds or the error changes.
+Outside a Bzlmod repository the proxy passes every byte through unchanged, so it is safe to configure globally.
 
 With Zed's Kotlin extension installed and kotlin-lsp 271.2085.0 unpacked (its launcher is
 `kotlin-server-271.2085.0/bin/intellij-server`), add to Zed's `settings.json`:

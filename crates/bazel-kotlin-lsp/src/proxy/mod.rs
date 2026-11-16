@@ -240,6 +240,7 @@ struct Envelope {
     method: Option<String>,
     id: Option<Value>,
     error: Option<IgnoredAny>,
+    result: Option<Value>,
 }
 
 fn pump_client(
@@ -277,6 +278,7 @@ fn from_client(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Optio
             let _ = control.send(Event::Response {
                 id: id.clone(),
                 ok: envelope.error.is_none(),
+                result: envelope.result,
             });
             None
         }
@@ -297,7 +299,14 @@ fn initialize(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Vec<u8
         .pointer("/params/capabilities/window/workDoneProgress")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let _ = control.send(Event::Initialize { work_done_progress });
+    let show_document = msg
+        .pointer("/params/capabilities/window/showDocument/support")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let _ = control.send(Event::Initialize {
+        work_done_progress,
+        show_document,
+    });
     let Some(params) = msg.get_mut("params") else {
         return body;
     };

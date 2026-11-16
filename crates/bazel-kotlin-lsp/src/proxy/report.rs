@@ -1,7 +1,11 @@
-//! What the proxy tells the editor about syncs: `$/progress` and `window/showMessage`.
+//! What the proxy tells the editor about syncs: `$/progress` and `window/showMessageRequest`.
 //!
 //! Nothing is sent before the client's `initialized` notification, and progress only to clients that advertise
 //! `window.workDoneProgress`. A progress token is used only once the client has answered its creation request.
+//! Failures are prompts with a button, not `window/showMessage`: Zed dismisses button-less messages after 5 s.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
@@ -11,17 +15,28 @@ const TITLE: &str = "Bazel sync";
 const SHOWN_LINES: usize = 5;
 const ERROR: u8 = 1;
 const WARNING: u8 = 2;
+const OPEN_LOG: &str = "Open log";
+const OK: &str = "OK";
 
 #[derive(Default)]
 pub struct Reporter {
     ready: bool,
     work_done_progress: bool,
+    show_document: bool,
+    /// Unanswered prompts, by request id, with the log their "Open log" opens.
+    prompts: BTreeMap<String, Option<PathBuf>>,
+    /// The last prompt shown since the last successful sync.
+    last_prompt: Option<String>,
     syncing: bool,
     phase: Option<String>,
     requests: u64,
     progress: ProgressState,
-    queued: Vec<Value>,
+    /// Prompts for syncs that ended before `initialized`, built once the client's capabilities are known.
+    queued: Vec<Prompt>,
 }
+
+/// (message type, Markdown text, log).
+type Prompt = (u8, String, Option<PathBuf>);
 
 #[derive(Default)]
 enum ProgressState {
@@ -37,13 +52,17 @@ enum ProgressState {
 }
 
 impl Reporter {
-    pub fn initialize(&mut self, work_done_progress: bool) {
+    pub fn initialize(&mut self, work_done_progress: bool, show_document: bool) {
         self.work_done_progress = work_done_progress;
+        self.show_document = show_document;
     }
 
     pub fn initialized(&mut self) -> Vec<Value> {
         self.ready = true;
-        let mut out = std::mem::take(&mut self.queued);
+        let mut out: Vec<Value> = std::mem::take(&mut self.queued)
+            .into_iter()
+            .map(|p| self.show(p))
+            .collect();
         if self.syncing {
             out.extend(self.create_progress());
         }
@@ -67,7 +86,18 @@ impl Reporter {
     }
 
     /// The client's reply to one of the proxy's requests.
-    pub fn response(&mut self, id: &str, ok: bool) -> Vec<Value> {
+    pub fn response(&mut self, id: &str, ok: bool, result: Option<&Value>) -> Vec<Value> {
+        if let Some(log) = self.prompts.remove(id) {
+            let chose_open =
+                result.and_then(|r| r.get("title")).and_then(Value::as_str) == Some(OPEN_LOG);
+            return match (chose_open, log) {
+                (true, Some(log)) => vec![self.request(
+                    "window/showDocument",
+                    json!({"uri": super::file_uri(&log), "takeFocus": true}),
+                )],
+                _ => vec![],
+            };
+        }
         let ProgressState::Creating { id: pending, token } = &self.progress else {
             return vec![];
         };
@@ -99,14 +129,45 @@ impl Reporter {
             ));
             self.progress = ProgressState::Idle;
         }
-        if let Some(message) = show_message(result) {
+        if matches!(result, Ok(o) if o.summary.status == "ok") {
+            self.last_prompt = None;
+        }
+        if let Some(prompt) = prompt(result)
+            && self.last_prompt.as_ref() != Some(&prompt.1)
+        {
+            self.last_prompt = Some(prompt.1.clone());
             if self.ready {
-                out.push(message);
+                out.push(self.show(prompt));
             } else {
-                self.queued.push(message);
+                self.queued.push(prompt);
             }
         }
         out
+    }
+
+    fn show(&mut self, (kind, text, log): Prompt) -> Value {
+        let action = if self.show_document && log.is_some() {
+            OPEN_LOG
+        } else {
+            OK
+        };
+        let message = self.request(
+            "window/showMessageRequest",
+            json!({"type": kind, "message": text, "actions": [{"title": action}]}),
+        );
+        let id = message["id"].as_str().unwrap_or_default().to_string();
+        self.prompts.insert(id, log);
+        message
+    }
+
+    fn next_id(&mut self) -> u64 {
+        self.requests += 1;
+        self.requests
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = format!("bkl-{}", self.next_id());
+        json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
     }
 
     fn create_progress(&mut self) -> Option<Value> {
@@ -114,9 +175,9 @@ impl Reporter {
         {
             return None;
         }
-        self.requests += 1;
-        let id = format!("bkl-{}", self.requests);
-        let token = format!("bkl-sync-{}", self.requests);
+        let n = self.next_id();
+        let id = format!("bkl-{n}");
+        let token = format!("bkl-sync-{n}");
         let msg = json!({
             "jsonrpc": "2.0", "id": id, "method": "window/workDoneProgress/create",
             "params": {"token": token}
@@ -145,23 +206,39 @@ fn end_message(result: &Result<SyncOutcome, SyncError>) -> String {
     }
 }
 
-fn show_message(result: &Result<SyncOutcome, SyncError>) -> Option<Value> {
-    let (kind, text) = match result {
-        Err(e) => (ERROR, describe("Bazel sync failed", e)),
+/// (message type, Markdown text, log) of the prompt for a sync result, if it needs one.
+fn prompt(result: &Result<SyncOutcome, SyncError>) -> Option<Prompt> {
+    match result {
+        Err(e) => Some((ERROR, markdown("Bazel sync failed", e), e.log.clone())),
         Ok(o) if o.summary.status != "ok" => {
             let headline = "Bazel sync incomplete, navigation may miss some targets";
-            let text = match &o.summary.partial_reason {
-                Some(reason) => describe(headline, reason),
-                None => format!("{headline}\nLog: {}", o.summary.log.display()),
-            };
-            (WARNING, text)
+            Some(match &o.summary.partial_reason {
+                Some(reason) => (WARNING, markdown(headline, reason), reason.log.clone()),
+                None => (
+                    WARNING,
+                    format!("**{headline}**\n\nLog: `{}`", o.summary.log.display()),
+                    Some(o.summary.log.clone()),
+                ),
+            })
         }
-        Ok(_) => return None,
-    };
-    Some(json!({
-        "jsonrpc": "2.0", "method": "window/showMessage",
-        "params": {"type": kind, "message": text}
-    }))
+        Ok(_) => None,
+    }
+}
+
+/// Zed renders prompt text as Markdown.
+fn markdown(headline: &str, e: &SyncError) -> String {
+    let mut parts = vec![format!("**{headline}:** {}", e.message)];
+    let lines = highlights(&e.stderr_tail);
+    if !lines.is_empty() {
+        parts.push(format!("```\n{}\n```", lines.join("\n")));
+    }
+    if let Some(command) = &e.command {
+        parts.push(format!("Reproduce:\n```\n{command}\n```"));
+    }
+    if let Some(log) = &e.log {
+        parts.push(format!("Log: `{}`", log.display()));
+    }
+    parts.join("\n\n")
 }
 
 pub fn describe(headline: &str, e: &SyncError) -> String {
@@ -220,23 +297,122 @@ mod tests {
     #[test]
     fn nothing_is_sent_before_initialized() {
         let mut r = Reporter::default();
-        r.initialize(true);
+        r.initialize(true, false);
         assert!(r.sync_started().is_empty());
         assert!(r.sync_done(&Err(SyncError::default())).is_empty());
         let out = r.initialized();
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0]["method"], "window/showMessage");
+        assert_eq!(out[0]["method"], "window/showMessageRequest");
+    }
+
+    fn failure(message: &str) -> Result<SyncOutcome, SyncError> {
+        Err(SyncError {
+            message: message.into(),
+            command: Some("bazelisk build //...".into()),
+            stderr_tail: vec!["ERROR: /ws/b/BUILD.bazel:1:1: no such target".into()],
+            log: Some("/c/sync.log".into()),
+        })
+    }
+
+    fn ok() -> Result<SyncOutcome, SyncError> {
+        let mut outcome = SyncOutcome::default();
+        outcome.summary.status = "ok".into();
+        Ok(outcome)
+    }
+
+    fn ready(show_document: bool) -> Reporter {
+        let mut r = Reporter::default();
+        r.initialize(false, show_document);
+        r.initialized();
+        r
+    }
+
+    #[test]
+    fn a_failure_is_a_prompt_that_stays_until_answered() {
+        let mut r = ready(true);
+        let out = r.sync_done(&failure("Bazel build failed (exit 2)"));
+        assert_eq!(out.len(), 1);
+        let prompt = &out[0];
+        assert_eq!(prompt["method"], "window/showMessageRequest", "{prompt}");
+        assert!(
+            prompt["id"].as_str().unwrap().starts_with("bkl-"),
+            "{prompt}"
+        );
+        assert_eq!(prompt["params"]["type"], ERROR);
+        assert_eq!(prompt["params"]["actions"], json!([{"title": "Open log"}]));
+        let text = prompt["params"]["message"].as_str().unwrap();
+        for expected in [
+            "Bazel build failed (exit 2)",
+            "ERROR: /ws/b/BUILD.bazel:1:1: no such target",
+            "bazelisk build //...",
+            "/c/sync.log",
+        ] {
+            assert!(text.contains(expected), "{expected:?} missing from {text}");
+        }
+    }
+
+    #[test]
+    fn open_log_shows_the_log_file() {
+        let mut r = ready(true);
+        let prompt = r.sync_done(&failure("boom")).remove(0);
+        let id = prompt["id"].as_str().unwrap();
+        let out = r.response(id, true, Some(&json!({"title": "Open log"})));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["method"], "window/showDocument", "{}", out[0]);
+        assert_eq!(out[0]["params"]["uri"], "file:///c/sync.log");
+        assert!(out[0]["id"].as_str().unwrap().starts_with("bkl-"));
+        assert!(
+            r.response(id, true, None).is_empty(),
+            "a prompt is answered once"
+        );
+    }
+
+    #[test]
+    fn closing_the_prompt_opens_nothing() {
+        let mut r = ready(true);
+        let prompt = r.sync_done(&failure("boom")).remove(0);
+        let id = prompt["id"].as_str().unwrap();
+        assert!(r.response(id, true, Some(&Value::Null)).is_empty());
+    }
+
+    #[test]
+    fn without_show_document_the_prompt_offers_ok() {
+        let mut r = ready(false);
+        let prompt = r.sync_done(&failure("boom")).remove(0);
+        assert_eq!(prompt["params"]["actions"], json!([{"title": "OK"}]));
+        let id = prompt["id"].as_str().unwrap();
+        assert!(
+            r.response(id, true, Some(&json!({"title": "OK"})))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_same_failure_is_prompted_once_until_a_sync_succeeds() {
+        let mut r = ready(true);
+        assert_eq!(r.sync_done(&failure("boom")).len(), 1);
+        assert!(
+            r.sync_done(&failure("boom")).is_empty(),
+            "same failure again"
+        );
+        assert_eq!(r.sync_done(&failure("other")).len(), 1, "a new failure");
+        assert!(r.sync_done(&ok()).is_empty());
+        assert_eq!(
+            r.sync_done(&failure("other")).len(),
+            1,
+            "failing again after a success"
+        );
     }
 
     #[test]
     fn a_late_creation_reply_starts_no_progress() {
         let mut r = Reporter::default();
-        r.initialize(true);
+        r.initialize(true, false);
         r.initialized();
         let create = r.sync_started();
         let id = create[0]["id"].as_str().unwrap().to_string();
         r.sync_done(&Err(SyncError::default()));
-        assert!(r.response(&id, true).is_empty());
+        assert!(r.response(&id, true, None).is_empty());
         assert_eq!(
             r.sync_started()[0]["method"],
             "window/workDoneProgress/create"

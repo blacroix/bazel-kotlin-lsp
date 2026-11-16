@@ -24,12 +24,14 @@ const STOP_WAIT: Duration = Duration::from_secs(10);
 pub enum Event {
     Initialize {
         work_done_progress: bool,
+        show_document: bool,
     },
     Initialized,
     /// The client's reply to a proxy request.
     Response {
         id: String,
         ok: bool,
+        result: Option<Value>,
     },
     Phase(String),
     SyncDone(Box<Result<SyncOutcome, SyncError>>),
@@ -171,12 +173,17 @@ impl<W: Write> Control<W> {
                 },
             };
             let out = match event {
-                Event::Initialize { work_done_progress } => {
-                    self.reporter.initialize(work_done_progress);
+                Event::Initialize {
+                    work_done_progress,
+                    show_document,
+                } => {
+                    self.reporter.initialize(work_done_progress, show_document);
                     vec![]
                 }
                 Event::Initialized => self.reporter.initialized(),
-                Event::Response { id, ok } => self.reporter.response(&id, ok),
+                Event::Response { id, ok, result } => {
+                    self.reporter.response(&id, ok, result.as_ref())
+                }
                 Event::Phase(phase) => self.reporter.phase(&phase),
                 Event::SyncDone(result) => {
                     self.running = None;
