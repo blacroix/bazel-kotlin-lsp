@@ -81,3 +81,22 @@ shared through Bazel's repository cache. Expect a few hundred MB of disk per rep
 it stays up for up to 3 hours after the last sync; to stop it sooner, run
 `bazel --output_base=<printed folder>/../output_base shutdown` in your repository. Pass `--shared-output-base` to use
 your own output base instead.
+
+Each repository (each worktree, too) gets its own folder in the cache, holding the Bazel output base, the model and,
+through the proxy, kotlin-lsp's index (a few hundred MB more). Opening a new worktree therefore costs one cold sync
+and one full indexing, about a minute for a mid-sized service; reopening it is quick.
+
+## Cleaning up
+
+A cache folder records which workspace it belongs to. When the proxy starts, it removes the folders of workspaces
+that no longer exist and have not been used for 3 days, stopping their Bazel server first. To do it by hand:
+
+```sh
+bazel-kotlin-lsp gc --dry-run              # list what would be removed
+bazel-kotlin-lsp gc                        # remove it
+bazel-kotlin-lsp gc --workspace /path/to/old-worktree   # remove one workspace's cache now
+```
+
+Folders written by versions without that record are removed once untouched for 14 days. Indexes that kotlin-lsp
+built in its own cache before the proxy chose the location
+(`~/Library/Caches/JetBrains/IntelliJServer/workspaces` on macOS) are not touched; delete them by hand if needed.
