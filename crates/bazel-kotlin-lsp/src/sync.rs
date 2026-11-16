@@ -195,7 +195,7 @@ pub fn locate(opts: &SyncOptions) -> Result<Located, SyncError> {
     let cache = opts
         .cache_root
         .clone()
-        .or_else(|| cache_root(&|k| std::env::var(k).ok(), cfg!(target_os = "macos")))
+        .or_else(platform_cache_root)
         .ok_or_else(|| {
             SyncError::new("cannot find a cache folder: set HOME to an absolute path")
         })?;
@@ -642,4 +642,9 @@ pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// The cache root for this platform and environment, if it has an absolute base.
+pub fn platform_cache_root() -> Option<PathBuf> {
+    cache_root(&|k| std::env::var(k).ok(), cfg!(target_os = "macos"))
 }

@@ -1,8 +1,9 @@
 use std::process::ExitCode;
 
 use bazel_kotlin_lsp::cli::{Cli, Command};
+use bazel_kotlin_lsp::gc::{self, GcOptions};
 use bazel_kotlin_lsp::proxy::{self, ProxyOptions};
-use bazel_kotlin_lsp::sync::run_sync;
+use bazel_kotlin_lsp::sync::{now_secs, platform_cache_root, run_sync};
 use clap::Parser;
 
 fn main() -> ExitCode {
@@ -32,6 +33,27 @@ fn main() -> ExitCode {
                 command: args.command,
             });
             ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Command::Gc(args) => {
+            let Some(cache_root) = args.cache_root.or_else(platform_cache_root) else {
+                eprintln!("error: cannot find a cache folder: set HOME to an absolute path");
+                return ExitCode::from(1);
+            };
+            let opts = GcOptions {
+                cache_root,
+                dry_run: args.dry_run,
+                workspace: args.workspace,
+            };
+            match gc::gc(&opts, now_secs()) {
+                Ok(entries) => {
+                    print!("{}", gc::report(&entries));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e:#}");
+                    ExitCode::from(1)
+                }
+            }
         }
     }
 }

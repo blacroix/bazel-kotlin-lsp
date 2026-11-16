@@ -21,6 +21,21 @@ pub enum Command {
     Sync(SyncArgs),
     /// Run kotlin-lsp behind an LSP proxy that keeps workspace.json in sync with Bazel.
     Proxy(ProxyArgs),
+    /// Remove the caches (Bazel output base, model, kotlin-lsp index) of workspaces that no longer exist.
+    Gc(GcArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct GcArgs {
+    /// List what would be removed, and remove nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Remove this workspace's cache now, even if the workspace still exists; nothing else.
+    #[arg(long, value_name = "DIR")]
+    pub workspace: Option<PathBuf>,
+    /// Cache root instead of the platform cache folder (tests).
+    #[arg(long, value_name = "DIR", hide = true)]
+    pub cache_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
