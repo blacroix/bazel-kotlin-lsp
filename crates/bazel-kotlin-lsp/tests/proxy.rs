@@ -53,7 +53,7 @@ fn messages(bytes: &[u8]) -> Vec<Value> {
     out
 }
 
-fn model_uri(dir: &Path) -> String {
+fn paths(dir: &Path) -> bazel_kotlin_lsp::sync::SyncPaths {
     let opts = SyncOptions {
         start_dir: dir.to_path_buf(),
         cache_root: Some(dir.join("cache")),
@@ -62,7 +62,53 @@ fn model_uri(dir: &Path) -> String {
     let Located::Bzlmod(paths) = locate(&opts).unwrap() else {
         panic!("not Bzlmod")
     };
-    url::Url::from_file_path(paths.model_dir).unwrap().into()
+    paths
+}
+
+fn model_uri(dir: &Path) -> String {
+    url::Url::from_file_path(paths(dir).model_dir)
+        .unwrap()
+        .into()
+}
+
+/// Sends `initialize` and `exit`; returns what the child received.
+fn initialize_through_proxy(dir: &Path, params: Value) -> Vec<Value> {
+    let rec = dir.join("received");
+    let mut proxy = spawn_proxy(dir, RECORD, &[rec.to_str().unwrap()]);
+    let mut stdin = proxy.stdin.take().unwrap();
+    for msg in [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params}),
+        json!({"jsonrpc": "2.0", "method": "exit"}),
+    ] {
+        stdin.write_all(&framed(&msg.to_string())).unwrap();
+    }
+    drop(stdin);
+    assert!(wait_with_timeout(&mut proxy, Duration::from_secs(20)).success());
+    messages(&std::fs::read(&rec).unwrap())
+}
+
+#[test]
+fn kotlin_lsp_index_is_kept_in_the_workspace_cache() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let received = initialize_through_proxy(dir, json!({"rootUri": "file:///r"}));
+    let index_dir = paths(dir).layout.kotlin_lsp_index_dir();
+    assert_eq!(
+        received[0]["params"]["initializationOptions"]["indexDir"],
+        json!(index_dir.to_str().unwrap())
+    );
+}
+
+#[test]
+fn proxy_start_removes_stale_caches() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    let stale = dir.join("cache/bazel-kotlin-lsp/stale");
+    std::fs::create_dir_all(stale.join("model")).unwrap();
+    bkl_core::cache::write_owner(&stale, Path::new("/nonexistent/worktree"), 0).unwrap();
+    initialize_through_proxy(dir, json!({}));
+    assert!(!stale.exists(), "the stale cache is still there");
 }
 
 const RECORD: &str = r#"cat > "$0""#;

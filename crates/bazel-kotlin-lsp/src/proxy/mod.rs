@@ -22,7 +22,11 @@ use serde::de::IgnoredAny;
 use serde_json::Value;
 
 use crate::bazel::Cancel;
-use crate::sync::{Located, Progress, SyncError, SyncOptions, SyncOutcome, locate, run_sync};
+use crate::gc::GcOptions;
+use crate::sync::{
+    Located, Progress, SyncError, SyncOptions, SyncOutcome, locate, now_secs, platform_cache_root,
+    run_sync,
+};
 use control::Event;
 
 const DEBOUNCE: Duration = Duration::from_secs(2);
@@ -48,6 +52,8 @@ pub struct BazelMode {
     /// The folder holding `workspace.json`.
     model_dir: PathBuf,
     model_uri: String,
+    /// kotlin-lsp's `indexDir`, unless the client sets one.
+    index_dir: Option<PathBuf>,
     syncer: Arc<dyn Syncer>,
     watch: Option<WatchSpec>,
 }
@@ -63,9 +69,16 @@ impl BazelMode {
         BazelMode {
             model_uri: file_uri(&model_dir),
             model_dir,
+            index_dir: None,
             syncer,
             watch: None,
         }
+    }
+
+    /// Keeps kotlin-lsp's index in `dir`, so removing the workspace's cache removes it too.
+    pub fn with_index_dir(mut self, dir: PathBuf) -> Self {
+        self.index_dir = Some(dir);
+        self
     }
 
     /// Re-syncs after build file changes under `root` and the local modules.
@@ -119,10 +132,17 @@ pub fn log(message: &str) {
 
 /// Runs the proxy on stdin and stdout; returns the exit code.
 pub fn run(opts: ProxyOptions) -> i32 {
+    let cleanup = opts
+        .sync
+        .cache_root
+        .clone()
+        .or_else(platform_cache_root)
+        .map(|cache_root| std::thread::spawn(move || remove_stale_caches(cache_root)));
     let mode = match locate(&opts.sync) {
         Ok(Located::Bzlmod(paths)) => Mode::Bazel(
             BazelMode::new(paths.model_dir, Arc::new(BazelSyncer(opts.sync)))
-                .with_watch(paths.root, DEBOUNCE),
+                .with_watch(paths.root, DEBOUNCE)
+                .with_index_dir(paths.layout.kotlin_lsp_index_dir()),
         ),
         Ok(Located::NotBzlmod(why)) => {
             log(&format!("{why}; passing messages through unchanged"));
@@ -133,12 +153,34 @@ pub fn run(opts: ProxyOptions) -> i32 {
             Mode::PassThrough
         }
     };
-    match serve(io::stdin(), io::stdout(), &opts.command, mode) {
+    let code = match serve(io::stdin(), io::stdout(), &opts.command, mode) {
         Ok(code) => code,
         Err(e) => {
             log(&format!("{e}"));
             1
         }
+    };
+    if let Some(cleanup) = cleanup {
+        let _ = cleanup.join();
+    }
+    code
+}
+
+/// Removes the caches of workspaces that are gone, logging what it did.
+fn remove_stale_caches(cache_root: PathBuf) {
+    let opts = GcOptions {
+        cache_root,
+        dry_run: false,
+        workspace: None,
+    };
+    match crate::gc::gc(&opts, now_secs()) {
+        Ok(entries) if entries.is_empty() => {}
+        Ok(entries) => {
+            for line in crate::gc::report(&entries).lines() {
+                log(&format!("cache clean-up: {line}"));
+            }
+        }
+        Err(e) => log(&format!("cache clean-up: {e:#}")),
     }
 }
 
@@ -189,7 +231,11 @@ where
                 control::spawn(bazel.syncer.clone(), bazel.watch.take(), client_out.clone());
             let to_control = events.clone();
             std::thread::spawn(move || {
-                pump_client(client_in, child_in, &bazel.model_uri, &to_control);
+                let inject = Injection {
+                    model_uri: bazel.model_uri,
+                    index_dir: bazel.index_dir,
+                };
+                pump_client(client_in, child_in, &inject, &to_control);
                 let _ = closed_tx.send(());
             });
             std::thread::spawn(move || {
@@ -246,7 +292,7 @@ struct Envelope {
 fn pump_client(
     client_in: impl Read,
     mut child_in: ChildStdin,
-    model_uri: &str,
+    inject: &Injection,
     control: &Sender<Event>,
 ) {
     let mut reader = BufReader::new(client_in);
@@ -259,7 +305,7 @@ fn pump_client(
                 return;
             }
         };
-        let Some(body) = from_client(body, model_uri, control) else {
+        let Some(body) = from_client(body, inject, control) else {
             continue;
         };
         if write_body(&mut child_in, &body).is_err() {
@@ -269,7 +315,13 @@ fn pump_client(
 }
 
 /// What to forward to kotlin-lsp for one client message; `None` for replies to the proxy's own requests.
-fn from_client(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Option<Vec<u8>> {
+/// What the proxy adds to the client's `initialize`.
+struct Injection {
+    model_uri: String,
+    index_dir: Option<PathBuf>,
+}
+
+fn from_client(body: Vec<u8>, inject: &Injection, control: &Sender<Event>) -> Option<Vec<u8>> {
     let Ok(envelope) = serde_json::from_slice::<Envelope>(&body) else {
         return Some(body);
     };
@@ -282,7 +334,7 @@ fn from_client(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Optio
             });
             None
         }
-        (Some("initialize"), _) => Some(initialize(body, model_uri, control)),
+        (Some("initialize"), _) => Some(initialize(body, inject, control)),
         (Some("initialized"), _) => {
             let _ = control.send(Event::Initialized);
             Some(body)
@@ -291,7 +343,7 @@ fn from_client(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Optio
     }
 }
 
-fn initialize(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Vec<u8> {
+fn initialize(body: Vec<u8>, inject: &Injection, control: &Sender<Event>) -> Vec<u8> {
     let Ok(mut msg) = serde_json::from_slice::<Value>(&body) else {
         return body;
     };
@@ -310,9 +362,12 @@ fn initialize(body: Vec<u8>, model_uri: &str, control: &Sender<Event>) -> Vec<u8
     let Some(params) = msg.get_mut("params") else {
         return body;
     };
-    if !init::inject_project(params, model_uri) {
+    if !init::inject_project(params, &inject.model_uri) {
         log("initializationOptions is not an object; kotlin-lsp will not see the Bazel model");
         return body;
+    }
+    if let Some(dir) = &inject.index_dir {
+        init::inject_index_dir(params, dir);
     }
     serde_json::to_vec(&msg).unwrap_or(body)
 }

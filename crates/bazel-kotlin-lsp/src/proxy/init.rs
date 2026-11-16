@@ -27,6 +27,19 @@ pub fn inject_project(params: &mut Value, model_uri: &str) -> bool {
     true
 }
 
+/// Sets `params.initializationOptions.indexDir` to `dir` unless the client chose one. Call after
+/// [`inject_project`] succeeded, which makes the options an object.
+pub fn inject_index_dir(params: &mut Value, dir: &std::path::Path) {
+    if let Some(options) = params
+        .get_mut("initializationOptions")
+        .and_then(Value::as_object_mut)
+    {
+        options
+            .entry("indexDir")
+            .or_insert_with(|| json!(dir.to_string_lossy()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +95,15 @@ mod tests {
         let mut params = json!({"initializationOptions": "x"});
         assert!(!inject_project(&mut params, URI));
         assert_eq!(params, json!({"initializationOptions": "x"}));
+    }
+
+    #[test]
+    fn index_dir_is_set_unless_the_client_chose_one() {
+        let mut params = injected(json!({}));
+        inject_index_dir(&mut params, std::path::Path::new("/cache/idx"));
+        assert_eq!(params["initializationOptions"]["indexDir"], "/cache/idx");
+        let mut mine = injected(json!({"initializationOptions": {"indexDir": "/mine"}}));
+        inject_index_dir(&mut mine, std::path::Path::new("/cache/idx"));
+        assert_eq!(mine["initializationOptions"]["indexDir"], "/mine");
     }
 }
