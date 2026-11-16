@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
-    Fs, ModelContext, Role, classify, kotlin_package, module_name, resolve_exec_path, source_root,
+    Fs, ModelContext, Role, classify, kotlin_package, module_name, package_folder_root,
+    resolve_exec_path, source_root,
 };
 use crate::aspect::TargetInfo;
 
@@ -102,6 +103,15 @@ fn is_test(t: &TargetInfo) -> bool {
     TEST_KINDS.contains(&t.kind.as_str())
 }
 
+/// The folder holding the target's BUILD file.
+fn package_dir(t: &TargetInfo, ctx: &ModelContext) -> Option<PathBuf> {
+    if t.repo.is_empty() {
+        return Some(ctx.workspace_root.join(&t.package));
+    }
+    ctx.local_module(&t.repo)
+        .map(|m| m.abs_path.join(&t.package))
+}
+
 fn target_roots(
     t: &TargetInfo,
     ctx: &ModelContext,
@@ -118,11 +128,15 @@ fn target_roots(
                 .any(|ext| s.ends_with(&format!(".{ext}")))
         })
         .map(|s| (s, true));
+    let package_dir = package_dir(t, ctx);
     let mut out: Vec<(PathBuf, SourceRootEntry)> = Vec::new();
     for (src, is_generated) in sources.chain(generated) {
         let file = resolve_exec_path(ctx, src);
         let package = fs.read_head(&file).and_then(|head| kotlin_package(&head));
-        let root = source_root(&file, package.as_deref(), is_generated);
+        let mut root = source_root(&file, package.as_deref(), is_generated);
+        if let Some(dir) = &package_dir {
+            root = package_folder_root(root, &file, dir);
+        }
         if out.iter().all(|(p, _)| *p != root.path) {
             out.push((
                 root.path,
@@ -255,5 +269,165 @@ mod tests {
             &fs,
         );
         assert!(groups.is_empty() && names.is_empty());
+    }
+
+    type RootSummary = (String, Option<String>);
+
+    fn root_summary(g: &ModuleGroup) -> Vec<RootSummary> {
+        g.roots
+            .iter()
+            .map(|(p, e)| (p.display().to_string(), e.package_prefix.clone()))
+            .collect()
+    }
+
+    fn per_package() -> (Vec<TargetInfo>, FakeFs) {
+        let base = "layout/src/main/kotlin/fixture/layout";
+        let fs = FakeFs::with(&[
+            (
+                "/ws/layout/src/main/kotlin/fixture/layout/core/Core.kt",
+                "package fixture.layout.core\n",
+            ),
+            (
+                "/ws/layout/src/main/kotlin/fixture/layout/core/impl/Impl.kt",
+                "package fixture.layout.core.impl\n",
+            ),
+            (
+                "/ws/layout/src/main/kotlin/fixture/layout/feature/Feature.kt",
+                "package fixture.layout.feature\n",
+            ),
+            (
+                "/ws/layout/src/main/kotlin/fixture/layout/feature/FeatureTest.kt",
+                "package fixture.layout.feature\n",
+            ),
+        ]);
+        let targets = vec![
+            kt(
+                &format!("@@//{base}/core:core"),
+                "kt_jvm_library",
+                &[
+                    &format!("{base}/core/Core.kt"),
+                    &format!("{base}/core/impl/Impl.kt"),
+                ],
+            ),
+            kt(
+                &format!("@@//{base}/feature:feature"),
+                "kt_jvm_library",
+                &[&format!("{base}/feature/Feature.kt")],
+            ),
+            kt(
+                &format!("@@//{base}/feature:feature_test"),
+                "kt_jvm_test",
+                &[&format!("{base}/feature/FeatureTest.kt")],
+            ),
+        ];
+        (targets, fs)
+    }
+
+    #[test]
+    fn one_build_per_package_under_a_shared_root_gives_one_module_per_package() {
+        let (targets, fs) = per_package();
+        let (groups, names) = group_modules(&targets, &ctx(), &fs);
+        let summary: Vec<(&str, Vec<RootSummary>)> = groups
+            .iter()
+            .map(|g| (g.name.as_str(), root_summary(g)))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (
+                    "fixture.layout.src.main.kotlin.fixture.layout.core.core",
+                    vec![(
+                        "/ws/layout/src/main/kotlin/fixture/layout/core".to_string(),
+                        Some("fixture.layout.core".to_string())
+                    )]
+                ),
+                (
+                    "fixture.layout.src.main.kotlin.fixture.layout.feature.feature",
+                    vec![(
+                        "/ws/layout/src/main/kotlin/fixture/layout/feature".to_string(),
+                        Some("fixture.layout.feature".to_string())
+                    )]
+                ),
+            ]
+        );
+        assert_eq!(
+            names["@@//layout/src/main/kotlin/fixture/layout/feature:feature_test"],
+            "fixture.layout.src.main.kotlin.fixture.layout.feature.feature"
+        );
+    }
+
+    #[test]
+    fn narrowing_to_one_package_leaves_the_other_out() {
+        let (targets, fs) = per_package();
+        let mut c = ctx();
+        c.scope =
+            crate::scope::Scope::folder(Path::new("layout/src/main/kotlin/fixture/layout/feature"));
+        let (groups, _) = group_modules(&targets, &c, &fs);
+        assert_eq!(groups.len(), 1);
+        let roots: Vec<&Path> = groups[0].roots.keys().map(PathBuf::as_path).collect();
+        assert_eq!(
+            roots,
+            [Path::new(
+                "/ws/layout/src/main/kotlin/fixture/layout/feature"
+            )]
+        );
+    }
+
+    #[test]
+    fn nested_packages_get_nested_roots() {
+        let fs = FakeFs::with(&[
+            ("/ws/src/main/kotlin/com/acme/Acme.kt", "package com.acme\n"),
+            (
+                "/ws/src/main/kotlin/com/acme/sub/Sub.kt",
+                "package com.acme.sub\n",
+            ),
+        ]);
+        let targets = vec![
+            kt(
+                "@@//src/main/kotlin/com/acme:acme",
+                "kt_jvm_library",
+                &["src/main/kotlin/com/acme/Acme.kt"],
+            ),
+            kt(
+                "@@//src/main/kotlin/com/acme/sub:sub",
+                "kt_jvm_library",
+                &["src/main/kotlin/com/acme/sub/Sub.kt"],
+            ),
+        ];
+        let (groups, _) = group_modules(&targets, &ctx(), &fs);
+        let roots: Vec<RootSummary> = groups.iter().flat_map(root_summary).collect();
+        assert_eq!(
+            roots,
+            [
+                (
+                    "/ws/src/main/kotlin/com/acme".to_string(),
+                    Some("com.acme".to_string())
+                ),
+                (
+                    "/ws/src/main/kotlin/com/acme/sub".to_string(),
+                    Some("com.acme.sub".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn local_module_package_folder_uses_the_module_path() {
+        let fs = FakeFs::with(&[(
+            "/ws/modules/greeting/src/main/kotlin/fixture/greeting/Greeter.kt",
+            "package fixture.greeting\n",
+        )]);
+        let t = kt(
+            "@@greeting+//src/main/kotlin/fixture/greeting:greeting",
+            "kt_jvm_library",
+            &["external/greeting+/src/main/kotlin/fixture/greeting/Greeter.kt"],
+        );
+        let (groups, _) = group_modules(&[t], &ctx(), &fs);
+        let root = groups[0].roots.iter().next().unwrap();
+        assert_eq!(
+            root.0,
+            Path::new("/ws/modules/greeting/src/main/kotlin/fixture/greeting")
+        );
+        assert_eq!(root.1.package_prefix.as_deref(), Some("fixture.greeting"));
     }
 }

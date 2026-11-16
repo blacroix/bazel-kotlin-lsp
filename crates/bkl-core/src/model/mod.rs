@@ -21,7 +21,7 @@ pub(crate) use modules::{ModuleGroup, group_modules};
 pub use paths::resolve_exec_path;
 pub use roles::{Role, classify, module_name};
 pub use settings::java_major;
-pub use sources::{SourceRoot, kotlin_package, source_root};
+pub use sources::{SourceRoot, kotlin_package, package_folder_root, source_root};
 
 /// Everything about the workspace that the model needs besides the aspect's targets.
 #[derive(Debug, Clone)]

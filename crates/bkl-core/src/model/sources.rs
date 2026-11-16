@@ -63,6 +63,27 @@ pub fn source_root(file: &Path, package: Option<&str>, generated: bool) -> Sourc
     }
 }
 
+/// The root of a file whose Bazel package folder lies strictly below `root` (the folder minus the package path):
+/// that package folder, with its package as prefix. Targets then share a root only when they share a folder.
+pub fn package_folder_root(root: SourceRoot, file: &Path, package_dir: &Path) -> SourceRoot {
+    if root.generated || root.package_prefix.is_some() || !file.starts_with(package_dir) {
+        return root;
+    }
+    let rel = match package_dir.strip_prefix(&root.path) {
+        Ok(rel) if !rel.as_os_str().is_empty() => rel,
+        _ => return root,
+    };
+    let prefix: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    SourceRoot {
+        path: package_dir.to_path_buf(),
+        package_prefix: Some(prefix.join(".")),
+        generated: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +150,82 @@ mod tests {
                 package_prefix: None,
                 generated: true
             }
+        );
+    }
+
+    fn stripped(path: &str) -> SourceRoot {
+        SourceRoot {
+            path: path.into(),
+            package_prefix: None,
+            generated: false,
+        }
+    }
+
+    #[test]
+    fn package_folder_below_the_stripped_root_becomes_the_root() {
+        let r = package_folder_root(
+            stripped("/ws/src/main/kotlin"),
+            Path::new("/ws/src/main/kotlin/com/acme/core/impl/Impl.kt"),
+            Path::new("/ws/src/main/kotlin/com/acme/core"),
+        );
+        assert_eq!(
+            r,
+            SourceRoot {
+                path: "/ws/src/main/kotlin/com/acme/core".into(),
+                package_prefix: Some("com.acme.core".into()),
+                generated: false,
+            }
+        );
+    }
+
+    #[test]
+    fn package_folder_at_or_above_the_root_or_not_holding_the_file_keeps_it() {
+        let file = Path::new("/ws/src/main/kotlin/com/acme/core/Core.kt");
+        for package_dir in [
+            "/ws/src/main/kotlin",
+            "/ws",
+            "/elsewhere/pkg",
+            "/ws/src/main/kotlin/com/acme/other",
+        ] {
+            assert_eq!(
+                package_folder_root(
+                    stripped("/ws/src/main/kotlin"),
+                    file,
+                    Path::new(package_dir)
+                ),
+                stripped("/ws/src/main/kotlin"),
+                "{package_dir}"
+            );
+        }
+    }
+
+    #[test]
+    fn prefixed_and_generated_roots_are_kept() {
+        let prefixed = SourceRoot {
+            path: "/ws/shapes".into(),
+            package_prefix: Some("fixture.shapes".into()),
+            generated: false,
+        };
+        assert_eq!(
+            package_folder_root(
+                prefixed.clone(),
+                Path::new("/ws/shapes/sub/A.kt"),
+                Path::new("/ws/shapes/sub")
+            ),
+            prefixed
+        );
+        let generated = SourceRoot {
+            path: "/ob/bin".into(),
+            package_prefix: None,
+            generated: true,
+        };
+        assert_eq!(
+            package_folder_root(
+                generated.clone(),
+                Path::new("/ob/bin/app/A.kt"),
+                Path::new("/ob/bin/app")
+            ),
+            generated
         );
     }
 }
