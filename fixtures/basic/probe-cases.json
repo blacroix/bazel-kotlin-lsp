@@ -21,6 +21,13 @@
     "expect": "modules/shapes/shapes/Shape.kt"
   },
   {
+    "name": "cross-package (one BUILD per package under a shared source root)",
+    "file": "layout/src/main/kotlin/fixture/layout/feature/Feature.kt",
+    "line_contains": "import fixture.layout.core.Core",
+    "symbol": "Core",
+    "expect": "layout/src/main/kotlin/fixture/layout/core/Core.kt"
+  },
+  {
     "name": "Kotlin to Java",
     "file": "app/src/main/kotlin/fixture/app/App.kt",
     "line_contains": "import fixture.greeting.Strings",
@@ -72,6 +79,11 @@
   {
     "name": "compiler plugin and opt-in",
     "file": "app/src/main/kotlin/fixture/app/App.kt",
+    "expect_no_errors": true
+  },
+  {
+    "name": "one BUILD per package resolves",
+    "file": "layout/src/main/kotlin/fixture/layout/feature/Feature.kt",
     "expect_no_errors": true
   }
 ]

@@ -1,0 +1,32 @@
+{
+  "associates": [],
+  "class_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/layout/src/main/kotlin/fixture/layout/core/core.jar"
+  ],
+  "deps": [],
+  "exports": [],
+  "generated_srcs": [],
+  "import_jars": [],
+  "import_srcjar": [],
+  "java_home": "external/rules_java++toolchains+remotejdk21_macos_aarch64",
+  "kind": "kt_jvm_library",
+  "kotlinc": {
+    "api_version": "2.4",
+    "jvm_target": "1.8",
+    "language_version": "2.4",
+    "opt_in": [],
+    "plugin_classpath": [],
+    "plugin_options": []
+  },
+  "label": "@@//layout/src/main/kotlin/fixture/layout/core:core",
+  "name": "core",
+  "package": "layout/src/main/kotlin/fixture/layout/core",
+  "repo": "",
+  "source_jars": [
+    "bazel-out/darwin_arm64-fastbuild/bin/layout/src/main/kotlin/fixture/layout/core/core-sources.jar"
+  ],
+  "srcs": [
+    "layout/src/main/kotlin/fixture/layout/core/Core.kt"
+  ],
+  "tags": []
+}

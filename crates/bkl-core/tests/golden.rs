@@ -86,6 +86,8 @@ fn fixture_module_set() {
         [
             "fixture.app.app",
             "fixture.app.app_test",
+            "fixture.layout.src.main.kotlin.fixture.layout.core.core",
+            "fixture.layout.src.main.kotlin.fixture.layout.feature.feature",
             "greeting.greeting",
             "shapes.shapes.shapes"
         ]

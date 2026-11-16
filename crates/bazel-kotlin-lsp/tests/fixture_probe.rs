@@ -53,7 +53,7 @@ fn assert_all_pass(results: &[CaseResult]) {
         results.len() - failed.len(),
         results.len()
     );
-    assert_eq!(results.len(), 11);
+    assert_eq!(results.len(), 13);
 }
 
 #[test]

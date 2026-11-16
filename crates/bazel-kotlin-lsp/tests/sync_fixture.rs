@@ -25,9 +25,19 @@ fn sync_fixture_produces_expected_model() {
         [
             "fixture.app.app",
             "fixture.app.app_test",
+            "fixture.layout.src.main.kotlin.fixture.layout.core.core",
+            "fixture.layout.src.main.kotlin.fixture.layout.feature.feature",
             "greeting.greeting",
             "shapes.shapes.shapes"
         ]
+    );
+    let feature = module(
+        &ws,
+        "fixture.layout.src.main.kotlin.fixture.layout.feature.feature",
+    );
+    assert!(
+        dep_names(feature)
+            .contains(&"fixture.layout.src.main.kotlin.fixture.layout.core.core".to_string())
     );
 
     let app = dep_names(module(&ws, "fixture.app.app"));
@@ -166,4 +176,34 @@ fn scope_flag_turns_module_into_library() {
     for r in roots {
         assert!(std::path::Path::new(r["path"].as_str().unwrap()).exists());
     }
+}
+
+#[test]
+#[ignore = "needs Bazel and network"]
+fn scope_on_one_package_keeps_its_neighbour_out() {
+    let s = Synced::new();
+    let mut options = s.options();
+    options.scope_dirs = vec!["layout/src/main/kotlin/fixture/layout/feature".into()];
+    let outcome = run_sync(&options).unwrap();
+    let ws = workspace_json(&outcome.model_dir);
+    let modules = ws["modules"].as_array().unwrap();
+    assert_eq!(modules.len(), 1, "{modules:?}");
+    let roots: Vec<&str> = modules[0]["contentRoots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(roots.len(), 1, "{roots:?}");
+    assert!(
+        roots[0].ends_with("layout/src/main/kotlin/fixture/layout/feature"),
+        "{roots:?}"
+    );
+    assert!(
+        ws["libraries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["name"] == "@@//layout/src/main/kotlin/fixture/layout/core:core")
+    );
 }

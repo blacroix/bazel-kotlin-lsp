@@ -81,6 +81,8 @@ fn fixture_aspect_records_expected_targets() {
         "@@//app:app_test",
         "@@//gen:version",
         "@@//deps:serialization",
+        "@@//layout/src/main/kotlin/fixture/layout/core:core",
+        "@@//layout/src/main/kotlin/fixture/layout/feature:feature",
         "@@greeting+//:greeting",
         "@@shapes+//shapes:shapes",
         "@@shapes+//shapes:shapes_test",
