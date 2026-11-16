@@ -227,3 +227,40 @@ fn unexpected_mod_graph_output_names_the_command() {
     assert!(f.err.contains("bazel mod graph"), "{}", f.err);
     assert_reports(&f, "mod");
 }
+
+#[test]
+fn unknown_scope_dir_is_reported_before_building() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let mut opts = options(&dir);
+    opts.bazel = Some(
+        FakeBazel {
+            build: "echo 'build must not run' >&2; exit 2",
+            ..Default::default()
+        }
+        .install(&dir),
+    );
+    opts.scope_dirs = vec!["nope".into()];
+    let err = run_sync(&opts).unwrap_err().to_string();
+    assert!(
+        err.contains("--scope-dir") && err.contains("\"nope\""),
+        "{err}"
+    );
+    assert!(!err.contains("build must not run"), "{err}");
+}
+
+#[test]
+fn unknown_config_directory_names_the_config_file() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    std::fs::write(dir.join(".bazel-kotlin.toml"), "directories = [\"nope\"]\n").unwrap();
+    let mut opts = options(&dir);
+    opts.bazel = Some(FakeBazel::default().install(&dir));
+    let err = run_sync(&opts).unwrap_err().to_string();
+    assert!(
+        err.contains(".bazel-kotlin.toml") && err.contains("\"nope\""),
+        "{err}"
+    );
+}

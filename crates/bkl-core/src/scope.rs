@@ -32,6 +32,41 @@ pub fn load_scope_config(path: &Path) -> anyhow::Result<Option<ScopeConfig>> {
     Ok(Some(config))
 }
 
+/// Rewrites `cfg.directories` relative to the workspace root (absolute paths inside it are accepted) and checks
+/// that every included directory exists. Excluded directories may be missing.
+pub fn resolve_directories(cfg: &ScopeConfig, root: &Path) -> anyhow::Result<ScopeConfig> {
+    let mut directories = Vec::new();
+    for entry in &cfg.directories {
+        let (sign, dir) = match entry.strip_prefix('-') {
+            Some(dir) => ("-", dir),
+            None => ("", entry.as_str()),
+        };
+        let path = Path::new(dir.trim_end_matches('/'));
+        let rel = if path.is_absolute() {
+            match normalize(path).strip_prefix(root) {
+                Ok(rel) => rel.to_path_buf(),
+                Err(_) => bail!(
+                    "directory {dir:?} is outside the workspace root {}",
+                    root.display()
+                ),
+            }
+        } else {
+            normalize(path)
+        };
+        if sign.is_empty() && !root.join(&rel).is_dir() {
+            bail!(
+                "directory {dir:?}: no such folder under the workspace root {} (directories are relative to it)",
+                root.display()
+            );
+        }
+        directories.push(format!("{sign}{}", rel.to_string_lossy()));
+    }
+    Ok(ScopeConfig {
+        directories,
+        targets: cfg.targets.clone(),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
     includes: Vec<PathBuf>,
@@ -415,6 +450,45 @@ mod tests {
         assert!(Scope::whole_repo().contains("@@//a:b", Path::new("a")));
         assert!(Scope::folder(Path::new("app")).contains("@@//app/x:y", Path::new("app/x")));
         assert!(!Scope::folder(Path::new("app")).contains("@@//lib:y", Path::new("lib")));
+    }
+
+    #[test]
+    fn directories_are_made_root_relative_and_must_exist() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        std::fs::create_dir_all(root.join("app/legacy")).unwrap();
+        let abs = |p: &str| root.join(p).display().to_string();
+        let c = resolve_directories(
+            &cfg(
+                &[
+                    &abs("app"),
+                    &format!("-{}", abs("app/legacy")),
+                    ".",
+                    "-gone",
+                ],
+                &[],
+            ),
+            root,
+        )
+        .unwrap();
+        assert_eq!(c.directories, ["app", "-app/legacy", "", "-gone"]);
+
+        let err = format!(
+            "{:#}",
+            resolve_directories(&cfg(&["nope"], &[]), root).unwrap_err()
+        );
+        assert!(
+            err.contains("nope") && err.contains(&root.display().to_string()),
+            "{err}"
+        );
+        let err = format!(
+            "{:#}",
+            resolve_directories(&cfg(&["/elsewhere/app"], &[]), root).unwrap_err()
+        );
+        assert!(
+            err.contains("/elsewhere/app") && err.contains("outside"),
+            "{err}"
+        );
     }
 
     #[test]

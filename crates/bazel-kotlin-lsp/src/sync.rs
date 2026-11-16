@@ -15,7 +15,9 @@ use bkl_core::bep::aspect_json_files;
 use bkl_core::cache::{CacheLayout, cache_root, lock_exclusive, write_if_changed};
 use bkl_core::model::{ModelContext, RealFs, build_model, jar_targets, render};
 use bkl_core::root::{BazelRoot, find_bazel_root};
-use bkl_core::scope::{NARROW_THRESHOLD, Scope, ScopeConfig, load_scope_config, target_patterns};
+use bkl_core::scope::{
+    NARROW_THRESHOLD, Scope, ScopeConfig, load_scope_config, resolve_directories, target_patterns,
+};
 use bkl_core::version::MIN_BAZEL;
 use serde::{Deserialize, Serialize};
 
@@ -402,10 +404,16 @@ fn choose_scope(
             directories: opts.scope_dirs.clone(),
             targets: opts.targets.clone(),
         };
-        return Ok(Scope::from_config(&cfg, root_mapping)?);
+        let cfg = resolve_directories(&cfg, root)
+            .map_err(|e| SyncError::new(format!("--scope-dir: {e:#}")))?;
+        return Scope::from_config(&cfg, root_mapping)
+            .map_err(|e| SyncError::new(format!("--target: {e:#}")));
     }
-    if let Some(cfg) = load_scope_config(&root.join(CONFIG_FILE))? {
-        return Ok(Scope::from_config(&cfg, root_mapping)?);
+    let config_file = root.join(CONFIG_FILE);
+    if let Some(cfg) = load_scope_config(&config_file)? {
+        return resolve_directories(&cfg, root)
+            .and_then(|cfg| Scope::from_config(&cfg, root_mapping))
+            .map_err(|e| SyncError::new(format!("{}: {e:#}", config_file.display())));
     }
     let rel = start_dir.strip_prefix(root).unwrap_or(Path::new(""));
     if rel.as_os_str().is_empty() {

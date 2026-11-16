@@ -30,7 +30,8 @@ pub struct SyncArgs {
     /// Bazel binary (default: bazelisk, then bazel, on PATH).
     #[arg(long, value_name = "PATH")]
     pub bazel: Option<PathBuf>,
-    /// Directory to model as source modules, relative to the workspace root; a leading `-` excludes it.
+    /// Directory to model as source modules, relative to the workspace root (or absolute inside it); a leading `-`
+    /// excludes it.
     #[arg(long, value_name = "DIR", allow_hyphen_values = true)]
     pub scope_dir: Vec<String>,
     /// Extra target to model as a source module, in addition to the directories (the whole repo if none).
