@@ -22,7 +22,7 @@ use bkl_core::scope::{
 use bkl_core::version::MIN_BAZEL;
 use serde::{Deserialize, Serialize};
 
-use crate::bazel::{Bazel, BazelRun, BuildOutcome, Cancel, classify_build, resolve_binary};
+use crate::bazel::{Bazel, BazelRun, BuildOutcome, Cancel, classify_build, find_bazel};
 
 const CONFIG_FILE: &str = ".bazel-kotlin.toml";
 
@@ -271,8 +271,12 @@ fn sync_in(
     };
     phase("querying Bazel");
     let mut warnings = Vec::new();
+    if opts.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+        return Err(SyncError::new("sync cancelled"));
+    }
+    let (binary, version) = find_bazel(opts.bazel.as_deref(), root, std::env::var_os("PATH"))?;
     let bazel = Bazel {
-        binary: resolve_binary(opts.bazel.as_deref())?,
+        binary,
         workspace: root.to_path_buf(),
         output_base: (!opts.shared_output_base).then(|| layout.output_base()),
         aspect_dir: layout.aspect_dir(),
@@ -280,7 +284,7 @@ fn sync_in(
         echo: opts.echo_bazel,
         cancel: opts.cancel.clone(),
     };
-    match bazel.version()? {
+    match version {
         Some(v) if v < MIN_BAZEL => {
             return Err(SyncError::new(format!(
                 "Bazel {v} is too old; bazel-kotlin-lsp needs {MIN_BAZEL} or later"

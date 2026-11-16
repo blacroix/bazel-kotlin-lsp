@@ -102,24 +102,55 @@ pub fn classify_build(exit_code: i32, json_files: usize) -> BuildOutcome {
 }
 
 /// The explicit binary, else `bazelisk`, else `bazel`, on `PATH`.
-pub fn resolve_binary(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
-    resolve_binary_in(explicit, std::env::var_os("PATH"))
-}
-
-pub(crate) fn resolve_binary_in(
+/// The Bazel binary to run in `workspace`, with its version: the explicit one, else the first `bazelisk`, then
+/// `bazel`, on `PATH` whose `--version` works there. Version-manager shims (mise, asdf) exist on `PATH` even where
+/// they have no version configured, so finding the file is not enough.
+pub fn find_bazel(
     explicit: Option<&Path>,
+    workspace: &Path,
     path_var: Option<OsString>,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<(PathBuf, Option<BazelVersion>)> {
     if let Some(explicit) = explicit {
-        return Ok(explicit.to_path_buf());
+        let version = probe_version(explicit, workspace).map_err(anyhow::Error::msg)?;
+        return Ok((explicit.to_path_buf(), version));
     }
     let dirs: Vec<PathBuf> = std::env::split_paths(&path_var.unwrap_or_default()).collect();
-    for name in ["bazelisk", "bazel"] {
-        if let Some(found) = dirs.iter().map(|d| d.join(name)).find(|p| p.is_file()) {
-            return Ok(found);
+    let candidates = ["bazelisk", "bazel"]
+        .iter()
+        .flat_map(|name| dirs.iter().map(move |d| d.join(name)))
+        .filter(|p| p.is_file());
+    let mut failures = Vec::new();
+    for candidate in candidates {
+        match probe_version(&candidate, workspace) {
+            Ok(version) => return Ok((candidate, version)),
+            Err(why) => failures.push(why),
         }
     }
-    bail!("neither bazelisk nor bazel is on PATH; install one or pass --bazel <path>")
+    if failures.is_empty() {
+        bail!("neither bazelisk nor bazel is on PATH; install one or pass --bazel <path>");
+    }
+    bail!(
+        "no working Bazel on PATH in {}; fix one or pass --bazel <path>:\n  {}",
+        workspace.display(),
+        failures.join("\n  ")
+    )
+}
+
+fn probe_version(binary: &Path, workspace: &Path) -> Result<Option<BazelVersion>, String> {
+    let out = Command::new(binary)
+        .arg("--version")
+        .current_dir(workspace)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{}: {e}", binary.display()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{} --version failed: {}",
+            binary.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(parse_bazel_version(&String::from_utf8_lossy(&out.stdout)))
 }
 
 impl Bazel {
@@ -161,23 +192,6 @@ impl Bazel {
             bail!("sync cancelled");
         }
         Ok(())
-    }
-
-    pub fn version(&self) -> anyhow::Result<Option<BazelVersion>> {
-        self.check_cancelled()?;
-        let out = Command::new(&self.binary)
-            .arg("--version")
-            .current_dir(&self.workspace)
-            .output()
-            .with_context(|| format!("running {} --version", self.binary.display()))?;
-        if !out.status.success() {
-            bail!(
-                "{} --version failed: {}",
-                self.binary.display(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
-        Ok(parse_bazel_version(&String::from_utf8_lossy(&out.stdout)))
     }
 
     /// Runs one Bazel command in the workspace, appending the command line and all of stderr to the log.
@@ -314,31 +328,105 @@ mod tests {
         assert_eq!(classify_build(37, 3), BuildOutcome::Failed);
     }
 
+    /// A folder holding executable scripts, as (name, shell body).
+    fn bin_dir(scripts: &[(&str, &str)]) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in scripts {
+            let path = dir.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
+    }
+
+    const BROKEN_SHIM: &str = "echo 'mise ERROR No version is set for shim: bazelisk' >&2; exit 1";
+
+    fn path_of(dirs: &[&tempfile::TempDir]) -> Option<OsString> {
+        Some(std::env::join_paths(dirs.iter().map(|d| d.path())).unwrap())
+    }
+
     #[test]
-    fn resolve_binary_reports_all_candidates() {
-        let err = resolve_binary_in(None, Some(std::ffi::OsString::new()))
-            .unwrap_err()
-            .to_string();
+    fn broken_bazelisk_shim_falls_back_to_bazel() {
+        let bin = bin_dir(&[("bazelisk", BROKEN_SHIM), ("bazel", "echo 'bazel 9.2.0'")]);
+        let ws = tempfile::tempdir().unwrap();
+        let (found, version) = find_bazel(None, ws.path(), path_of(&[&bin])).unwrap();
+        assert_eq!(found, bin.path().join("bazel"));
+        assert_eq!(version.unwrap().to_string(), "9.2.0");
+    }
+
+    #[test]
+    fn a_later_working_bazelisk_on_path_wins_over_bazel() {
+        let shims = bin_dir(&[("bazelisk", BROKEN_SHIM)]);
+        let real = bin_dir(&[
+            ("bazelisk", "echo 'bazel 9.3.2'"),
+            ("bazel", "echo 'bazel 8.0.0'"),
+        ]);
+        let ws = tempfile::tempdir().unwrap();
+        let (found, _) = find_bazel(None, ws.path(), path_of(&[&shims, &real])).unwrap();
+        assert_eq!(found, real.path().join("bazelisk"));
+    }
+
+    #[test]
+    fn version_is_probed_in_the_workspace() {
+        let bin = bin_dir(&[(
+            "bazelisk",
+            "[ -f MODULE.bazel ] && echo 'bazel 9.3.2' || { echo 'not here' >&2; exit 1; }",
+        )]);
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::write(ws.path().join("MODULE.bazel"), "").unwrap();
+        let (found, _) = find_bazel(None, ws.path(), path_of(&[&bin])).unwrap();
+        assert_eq!(found, bin.path().join("bazelisk"));
+    }
+
+    #[test]
+    fn no_working_bazel_lists_every_candidate() {
+        let bin = bin_dir(&[
+            ("bazelisk", BROKEN_SHIM),
+            ("bazel", "echo 'bazel shim broken too' >&2; exit 2"),
+        ]);
+        let ws = tempfile::tempdir().unwrap();
+        let err = format!(
+            "{:#}",
+            find_bazel(None, ws.path(), path_of(&[&bin])).unwrap_err()
+        );
+        for expected in [
+            bin.path().join("bazelisk").display().to_string(),
+            "No version is set for shim".to_string(),
+            bin.path().join("bazel").display().to_string(),
+            "bazel shim broken too".to_string(),
+            "--bazel".to_string(),
+        ] {
+            assert!(err.contains(&expected), "{expected} missing from: {err}");
+        }
+        let none = format!(
+            "{:#}",
+            find_bazel(None, ws.path(), Some(OsString::new())).unwrap_err()
+        );
         assert!(
-            err.contains("bazelisk") && err.contains("bazel") && err.contains("--bazel"),
-            "{err}"
+            none.contains("neither bazelisk nor bazel is on PATH") && none.contains("--bazel"),
+            "{none}"
         );
     }
 
     #[test]
-    fn resolve_binary_prefers_explicit_then_bazelisk() {
-        let t = tempfile::tempdir().unwrap();
-        for name in ["bazelisk", "bazel"] {
-            std::fs::write(t.path().join(name), "").unwrap();
-        }
-        let path = Some(t.path().as_os_str().to_owned());
+    fn explicit_binary_is_used_and_never_replaced() {
+        let bin = bin_dir(&[
+            ("mine", "echo 'bazel 9.2.0'"),
+            ("broken", BROKEN_SHIM),
+            ("bazelisk", "echo 'bazel 9.3.2'"),
+        ]);
+        let ws = tempfile::tempdir().unwrap();
+        let path = path_of(&[&bin]);
+        let mine = bin.path().join("mine");
         assert_eq!(
-            resolve_binary_in(Some(Path::new("/x/bazel")), path.clone()).unwrap(),
-            PathBuf::from("/x/bazel")
+            find_bazel(Some(&mine), ws.path(), path.clone()).unwrap().0,
+            mine
         );
-        assert_eq!(
-            resolve_binary_in(None, path).unwrap(),
-            t.path().join("bazelisk")
+        let err = format!(
+            "{:#}",
+            find_bazel(Some(&bin.path().join("broken")), ws.path(), path).unwrap_err()
         );
+        assert!(err.contains("No version is set for shim"), "{err}");
     }
 }
