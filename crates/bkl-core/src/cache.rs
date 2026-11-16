@@ -6,16 +6,14 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-/// `$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS.
-pub fn cache_root(env: &dyn Fn(&str) -> Option<String>, macos: bool) -> PathBuf {
-    let home = PathBuf::from(env("HOME").unwrap_or_default());
+/// `$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS. `None` without an absolute base, so a
+/// missing `HOME` never puts the cache under the current directory.
+pub fn cache_root(env: &dyn Fn(&str) -> Option<String>, macos: bool) -> Option<PathBuf> {
+    let absolute = |k: &str| env(k).map(PathBuf::from).filter(|p| p.is_absolute());
     if macos {
-        return home.join("Library/Caches");
+        return absolute("HOME").map(|h| h.join("Library/Caches"));
     }
-    match env("XDG_CACHE_HOME").map(PathBuf::from) {
-        Some(xdg) if xdg.is_absolute() => xdg,
-        _ => home.join(".cache"),
-    }
+    absolute("XDG_CACHE_HOME").or_else(|| absolute("HOME").map(|h| h.join(".cache")))
 }
 
 /// First 16 hex characters of the SHA-256 of the workspace root's path.
@@ -105,18 +103,18 @@ mod tests {
     fn cache_root_linux_xdg_then_home() {
         assert_eq!(
             cache_root(&env(&[("XDG_CACHE_HOME", "/x"), ("HOME", "/h")]), false),
-            PathBuf::from("/x")
+            Some(PathBuf::from("/x"))
         );
         assert_eq!(
             cache_root(&env(&[("XDG_CACHE_HOME", ""), ("HOME", "/h")]), false),
-            PathBuf::from("/h/.cache")
+            Some(PathBuf::from("/h/.cache"))
         );
         assert_eq!(
             cache_root(
                 &env(&[("XDG_CACHE_HOME", "relative"), ("HOME", "/h")]),
                 false
             ),
-            PathBuf::from("/h/.cache")
+            Some(PathBuf::from("/h/.cache"))
         );
     }
 
@@ -124,8 +122,22 @@ mod tests {
     fn cache_root_macos() {
         assert_eq!(
             cache_root(&env(&[("XDG_CACHE_HOME", "/x"), ("HOME", "/h")]), true),
-            PathBuf::from("/h/Library/Caches")
+            Some(PathBuf::from("/h/Library/Caches"))
         );
+    }
+
+    #[test]
+    fn cache_root_is_never_relative() {
+        for macos in [true, false] {
+            assert_eq!(cache_root(&env(&[]), macos), None);
+            assert_eq!(cache_root(&env(&[("HOME", "")]), macos), None);
+            assert_eq!(cache_root(&env(&[("HOME", "relative")]), macos), None);
+        }
+        assert_eq!(
+            cache_root(&env(&[("XDG_CACHE_HOME", "/x")]), false),
+            Some(PathBuf::from("/x"))
+        );
+        assert_eq!(cache_root(&env(&[("XDG_CACHE_HOME", "/x")]), true), None);
     }
 
     #[test]

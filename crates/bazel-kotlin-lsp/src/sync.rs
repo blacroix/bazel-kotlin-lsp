@@ -139,7 +139,10 @@ pub fn run_sync(opts: &SyncOptions) -> Result<SyncOutcome, SyncError> {
     let cache = opts
         .cache_root
         .clone()
-        .unwrap_or_else(|| cache_root(&|k| std::env::var(k).ok(), cfg!(target_os = "macos")));
+        .or_else(|| cache_root(&|k| std::env::var(k).ok(), cfg!(target_os = "macos")))
+        .ok_or_else(|| {
+            SyncError::new("cannot find a cache folder: set HOME to an absolute path")
+        })?;
     let layout = CacheLayout::for_workspace(&cache, &realpath);
     let out_dir = opts.out_dir.clone().unwrap_or_else(|| layout.dir.clone());
     let log = out_dir.join("sync.log");
