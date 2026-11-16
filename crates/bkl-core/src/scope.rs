@@ -101,25 +101,46 @@ impl Scope {
     }
 }
 
-/// `//x:y` -> `@@//x:y`, `@app//x:y` -> `@@<canonical>//x:y`, `@app` -> `@@<canonical>//:app`.
+/// `//x:y` -> `@@//x:y`, `//x` -> `@@//x:x`, `@app//x:y` -> `@@<canonical>//x:y`, `@app` -> `@@<canonical>//:app`.
 fn canonical_label(label: &str, root_mapping: &BTreeMap<String, String>) -> anyhow::Result<String> {
-    if label.starts_with("@@") {
-        return Ok(label.to_string());
-    }
-    if label.starts_with("//") {
-        return Ok(format!("@@{label}"));
-    }
-    let Some(rest) = label.strip_prefix('@') else {
+    let (canonical, rest, repo_name) = if let Some(rest) = label.strip_prefix("@@") {
+        let (repo, rest) = split_repo(rest);
+        (repo.to_string(), rest, repo)
+    } else if let Some(rest) = label.strip_prefix("//") {
+        (String::new(), Some(rest), "")
+    } else if let Some(rest) = label.strip_prefix('@') {
+        let (apparent, rest) = split_repo(rest);
+        let Some(canonical) = root_mapping.get(apparent) else {
+            bail!("target {label:?}: repository @{apparent} is not visible from the root module");
+        };
+        (canonical.clone(), rest, apparent)
+    } else {
         bail!("target {label:?} must be an absolute label (//pkg:name or @repo//pkg:name)");
     };
-    let (repo, target) = match rest.split_once("//") {
-        Some((repo, target)) => (repo, target.to_string()),
-        None => (rest, format!(":{rest}")),
+    let (package, name) = match rest {
+        None => ("", repo_name),
+        Some(rest) => match rest.split_once(':') {
+            Some((package, name)) => (package, name),
+            None => (rest, rest.rsplit('/').next().unwrap_or(rest)),
+        },
     };
-    let Some(canonical) = root_mapping.get(repo) else {
-        bail!("target {label:?}: repository @{repo} is not visible from the root module");
-    };
-    Ok(format!("@@{canonical}//{target}"))
+    let is_pattern = package == "..."
+        || package.ends_with("/...")
+        || matches!(name, "" | "all" | "*" | "all-targets");
+    if is_pattern {
+        bail!(
+            "target {label:?} must be a single target label, not a pattern; use a directory to include a tree"
+        );
+    }
+    Ok(format!("@@{canonical}//{package}:{name}"))
+}
+
+/// `repo//pkg:name` -> (`repo`, Some(`pkg:name`)); `repo` -> (`repo`, None).
+fn split_repo(rest: &str) -> (&str, Option<&str>) {
+    match rest.split_once("//") {
+        Some((repo, rest)) => (repo, Some(rest)),
+        None => (rest, None),
+    }
 }
 
 /// Target patterns for `bazel build`: positive patterns, negative ones, the scope's explicit targets (after the
@@ -332,6 +353,51 @@ mod tests {
         assert!(s.contains("@@greeting+//:greeting", Path::new("modules/greeting")));
         assert!(s.contains("@@shapes+//:shapes", Path::new("modules/shapes")));
         assert!(!s.contains("@@//tools:other", Path::new("tools")));
+    }
+
+    #[test]
+    fn shorthand_labels_get_their_implicit_name() {
+        let s = Scope::from_config(
+            &cfg(
+                &["app"],
+                &["//tools/gen", "@shapes//shapes", "@@greeting+//lib"],
+            ),
+            &mapping(),
+        )
+        .unwrap();
+        assert!(s.contains("@@//tools/gen:gen", Path::new("tools/gen")));
+        assert!(s.contains(
+            "@@shapes+//shapes:shapes",
+            Path::new("modules/shapes/shapes")
+        ));
+        assert!(s.contains("@@greeting+//lib:lib", Path::new("modules/greeting/lib")));
+        assert_eq!(
+            target_patterns(&s, &mods(), &[]),
+            [
+                "//app/...",
+                "@@//tools/gen:gen",
+                "@@greeting+//lib:lib",
+                "@@shapes+//shapes:shapes"
+            ]
+        );
+    }
+
+    #[test]
+    fn target_patterns_are_rejected() {
+        for pattern in [
+            "//app/...",
+            "//app:all",
+            "//app:*",
+            "@greeting//...",
+            "//app:all-targets",
+            "//",
+        ] {
+            let err = Scope::from_config(&cfg(&[], &[pattern]), &mapping()).unwrap_err();
+            assert!(
+                err.to_string().contains("must be a single target label"),
+                "{pattern}: {err}"
+            );
+        }
     }
 
     #[test]
