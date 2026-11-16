@@ -97,6 +97,7 @@ impl Bazel {
             format!("--aspects={ASPECT}"),
             format!("--output_groups={output_group}"),
             "--remote_download_outputs=toplevel".into(),
+            "--norun_validations".into(),
             format!("--target_pattern_file={}", patterns_file.display()),
         ];
         if let Some(bep) = bep {
@@ -221,6 +222,7 @@ mod tests {
             "--aspects=@bazel_kotlin_lsp//:aspect.bzl%bkl_aspect",
             "--output_groups=bkl_json",
             "--remote_download_outputs=toplevel",
+            "--norun_validations",
             "--target_pattern_file=/c/targets.txt",
             "--build_event_json_file=/c/bep.json",
         ] {
