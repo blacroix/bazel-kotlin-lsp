@@ -204,13 +204,13 @@ fn sync_in(
         write_aspect(&bazel.aspect_dir, &placeholder)?;
     }
 
-    let info = checked(
+    let info_run = checked(
         &bazel,
         "info",
         &["output_base".into(), "execution_root".into()],
         log,
     )?;
-    let info: BTreeMap<&str, &str> = info
+    let info: BTreeMap<&str, &str> = info_run
         .stdout
         .lines()
         .filter_map(|l| l.split_once(": "))
@@ -218,27 +218,28 @@ fn sync_in(
     let (Some(output_base), Some(execution_root)) =
         (info.get("output_base"), info.get("execution_root"))
     else {
-        return Err(SyncError::new(
+        return Err(SyncError::bazel(
             "`bazel info` did not report output_base and execution_root",
+            &info_run,
+            log,
         ));
     };
-    let graph = parse_mod_graph(
-        &checked(
-            &bazel,
-            "mod",
-            &["graph".into(), "--output=json".into()],
-            log,
-        )?
-        .stdout,
+    let graph_run = checked(
+        &bazel,
+        "mod",
+        &["graph".into(), "--output=json".into()],
+        log,
     )?;
+    let graph = parse_mod_graph(&graph_run.stdout).map_err(bazel_error(&graph_run, log))?;
     let modules = discover_local_modules(&bazel, &graph, root, log)?;
-    let mapping_out = checked(
+    let mapping_run = checked(
         &bazel,
         "mod",
         &["dump_repo_mapping".into(), String::new()],
         log,
     )?;
-    let root_mapping = parse_repo_mapping(mapping_out.stdout.lines().next().unwrap_or("{}"))?;
+    let root_mapping = parse_repo_mapping(mapping_run.stdout.lines().next().unwrap_or("{}"))
+        .map_err(bazel_error(&mapping_run, log))?;
     let repos = rule_repos(&root_mapping, &graph)?;
     write_aspect(&bazel.aspect_dir, &repos)?;
 
@@ -254,8 +255,24 @@ fn sync_in(
         "build",
         &Bazel::build_args(&layout.patterns_file(), JSON_GROUP, Some(&bep)),
     )?;
+    if !matches!(build.exit_code, 0 | 1) {
+        return Err(SyncError::bazel(
+            format!("Bazel build failed (exit {})", build.exit_code),
+            &build,
+            log,
+        ));
+    }
     let bep_text = std::fs::read_to_string(&bep).unwrap_or_default();
-    let files = aspect_json_files(&bep_text)?;
+    let files = aspect_json_files(&bep_text).map_err(|e| {
+        SyncError::bazel(
+            format!(
+                "could not read Bazel's build event file {}: {e:#}",
+                bep.display()
+            ),
+            &build,
+            log,
+        )
+    })?;
     let missing: Vec<&PathBuf> = files.local.iter().filter(|p| !p.is_file()).collect();
     if !files.not_local.is_empty() || !missing.is_empty() {
         return Err(SyncError::bazel(
@@ -329,6 +346,11 @@ fn sync_in(
         error: None,
         log: log.to_path_buf(),
     })
+}
+
+/// Turns a failure to read a Bazel command's output into an error that names the command and the log.
+fn bazel_error<'a>(run: &'a BazelRun, log: &'a Path) -> impl Fn(anyhow::Error) -> SyncError + 'a {
+    move |e| SyncError::bazel(format!("{e:#}"), run, log)
 }
 
 fn checked(
