@@ -4,12 +4,41 @@ Cross-module Kotlin navigation for Bazel (Bzlmod) repositories in Zed and other 
 aspect over your targets and writes the `workspace.json` project model that JetBrains' kotlin-lsp imports, so
 go-to-definition, completion and find-usages work across Bazel modules and into library sources.
 
-**Status: early, used daily on macOS.** A Zed extension that does the setup below for you is on the way.
+**Status: early, used daily on macOS.**
 
 ## Install (Zed, macOS or Linux)
 
 You need Bazel 8 or later (`bazelisk` or `bazel` on your `PATH`) and Zed's **Kotlin** extension (Zed: Extensions,
-search "Kotlin"). Then:
+search "Kotlin"), which gives Zed the Kotlin language.
+
+### With the Zed extension
+
+The `extension` folder is a Zed extension, "Bazel Kotlin". On first use it downloads this project's release for your
+platform and kotlin-lsp 271.2085.0, then runs them for every Kotlin file. Until it is listed in Zed's extension
+registry, install it from a clone; Zed builds it with Rust, which must be installed through
+[rustup](https://rustup.rs):
+
+```sh
+git clone https://github.com/blacroix/bazel-kotlin-lsp
+```
+
+In Zed, run `zed: install dev extension` and pick the clone's `extension` folder. Then make it the Kotlin server
+(`zed: open settings`):
+
+```json
+{
+  "languages": {
+    "Kotlin": {
+      "language_servers": ["bazel-kotlin-lsp", "!kotlin-lsp", "!kotlin-language-server", "..."]
+    }
+  }
+}
+```
+
+Optional settings, all under `"lsp": {"bazel-kotlin-lsp": {...}}`: `"settings"` takes `bazel_path`, `scope_dirs`,
+`targets` (the `sync` flags below) and `kotlin_lsp_path`; `"binary": {"path": ...}` runs your own build of the proxy.
+
+### By hand
 
 **1. The proxy.** Pick your platform's target (`aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`) and download the latest release:

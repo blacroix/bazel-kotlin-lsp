@@ -1,5 +1,5 @@
 [tools]
-rust = { version = "1.99.1", components = "rustfmt,clippy" }
+rust = { version = "1.99.1", components = "rustfmt,clippy", targets = "wasm32-wasip2" }
 bazelisk = "1.30.0"
 
 [tasks.lint]
@@ -7,6 +7,11 @@ run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings"
 
 [tasks.test]
 run = "cargo test"
+
+[tasks."extension:check"]
+description = "Lint, test and build the Zed extension"
+dir = "extension"
+run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --release --target wasm32-wasip2"
 
 [tasks.integration]
 run = "cargo test -p bazel-kotlin-lsp --test record_fixture --test sync_fixture -- --ignored --test-threads=1"

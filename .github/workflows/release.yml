@@ -29,6 +29,8 @@ jobs:
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "bazel-kotlin-lsp") | .version')
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME does not match version $version"; exit 1; }
+          extension=$(sed -n 's/^version = "\(.*\)"$/\1/p' extension/extension.toml)
+          test "$extension" = "$version" || { echo "extension version $extension does not match $version"; exit 1; }
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: rustup target add ${{ matrix.target }}
