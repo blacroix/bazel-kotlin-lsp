@@ -4,7 +4,71 @@ Cross-module Kotlin navigation for Bazel (Bzlmod) repositories in Zed and other 
 aspect over your targets and writes the `workspace.json` project model that JetBrains' kotlin-lsp imports, so
 go-to-definition, completion and find-usages work across Bazel modules and into library sources.
 
-**Status: work in progress.**
+**Status: early, used daily on macOS.** A Zed extension that does the setup below for you is on the way.
+
+## Install (Zed, macOS or Linux)
+
+You need Bazel 8 or later (`bazelisk` or `bazel` on your `PATH`) and Zed's **Kotlin** extension (Zed: Extensions,
+search "Kotlin"). Then:
+
+**1. The proxy.** Pick your platform's target (`aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`) and download the latest release:
+
+```sh
+version=0.1.0
+target=aarch64-apple-darwin
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/blacroix/bazel-kotlin-lsp/releases/download/v$version/bazel-kotlin-lsp-$version-$target.tar.gz" \
+  | tar -xz -C ~/.local/bin
+~/.local/bin/bazel-kotlin-lsp --version
+```
+
+Use `curl` as above rather than a browser: macOS blocks unsigned binaries downloaded by a browser (if you did, run
+`xattr -d com.apple.quarantine ~/.local/bin/bazel-kotlin-lsp`). With a Rust 1.99 toolchain you can instead build it:
+`cargo install --git https://github.com/blacroix/bazel-kotlin-lsp bazel-kotlin-lsp`.
+
+**2. kotlin-lsp 271.2085.0**, the version this project is tested with:
+
+```sh
+v=271.2085.0
+mkdir -p ~/.local/share/kotlin-lsp && cd ~/.local/share/kotlin-lsp
+# macOS, Apple silicon (drop "-aarch64" on Intel):
+curl -fsSL -o kotlin-lsp.zip "https://download.jetbrains.com/language-server/kotlin-server/$v/kotlin-server-$v-aarch64.sit"
+ditto -x -k kotlin-lsp.zip . && rm kotlin-lsp.zip
+# Linux x86_64 (on arm64, add "-aarch64" before ".tar.gz"):
+# curl -fsSL "https://download.jetbrains.com/language-server/kotlin-server/$v/kotlin-server-$v.tar.gz" | tar -xz
+ls "kotlin-server-$v/bin/intellij-server"
+```
+
+**3. Zed settings** (`zed: open settings`). Replace `HOME` with your home folder (`echo $HOME`); Zed does not expand `~`:
+
+```json
+{
+  "lsp": {
+    "kotlin-lsp": {
+      "binary": {
+        "path": "HOME/.local/bin/bazel-kotlin-lsp",
+        "arguments": [
+          "proxy",
+          "--",
+          "HOME/.local/share/kotlin-lsp/kotlin-server-271.2085.0/bin/intellij-server",
+          "--stdio"
+        ]
+      }
+    }
+  },
+  "languages": {
+    "Kotlin": {
+      "language_servers": ["kotlin-lsp", "!kotlin-language-server", "..."]
+    }
+  }
+}
+```
+
+Open your Bazel repository in Zed and open a Kotlin file. The first sync and indexing take about a minute ("Bazel sync"
+then indexing in the status bar); after that, go-to-definition works across modules and into library sources. If a
+sync fails, a notification shows Bazel's error with an "Open log" button. Outside Bazel repositories the proxy passes
+everything through, so this setting is safe for every project.
 
 ## Usage
 
@@ -19,26 +83,7 @@ failed or incomplete sync shows a notification that stays until you close it, wi
 reproduce it and an "Open log" button. The same error is shown once until a sync succeeds or the error changes.
 Outside a Bzlmod repository the proxy passes every byte through unchanged, so it is safe to configure globally.
 
-With Zed's Kotlin extension installed and kotlin-lsp 271.2085.0 unpacked (its launcher is
-`kotlin-server-271.2085.0/bin/intellij-server`), add to Zed's `settings.json`:
-
-```json
-{
-  "lsp": {
-    "kotlin-lsp": {
-      "binary": {
-        "path": "/path/to/bazel-kotlin-lsp",
-        "arguments": ["proxy", "--", "/path/to/kotlin-server-271.2085.0/bin/intellij-server", "--stdio"]
-      }
-    }
-  },
-  "languages": {
-    "Kotlin": {
-      "language_servers": ["kotlin-lsp", "!kotlin-language-server", "..."]
-    }
-  }
-}
-```
+Zed runs it through the settings in [Install](#install-zed-macos-or-linux).
 
 The proxy finds the repository from the folder the editor starts it in (in Zed, the project folder). `sync`'s flags
 (`--workspace`, `--scope-dir`, `--target`, `--bazel`, `--shared-output-base`) go before `--`. The proxy writes only
