@@ -1,5 +1,5 @@
 [tools]
-rust = "1.99.1"
+rust = { version = "1.99.1", components = "rustfmt,clippy" }
 bazelisk = "1.30.0"
 
 [tasks.lint]
