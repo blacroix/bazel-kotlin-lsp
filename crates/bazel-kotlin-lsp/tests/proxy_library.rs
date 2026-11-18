@@ -37,7 +37,7 @@ fn the_editor_opens_library_files_through_file_addresses() {
     let definition = json!({"jsonrpc": "2.0", "id": 2, "result": [{"uri": JAR, "range": {}}]});
     let content =
         json!({"jsonrpc": "2.0", "id": "bkl-content-1", "result": {"text": "package pkg\n"}});
-    let script = r#"printf '%s' "$1"; cat > "$0" <&0 &
+    let script = r#"exec 3<&0; printf '%s' "$1"; cat > "$0" <&3 &
 i=0; while ! grep -q textDocumentContent "$0" 2>/dev/null && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
 printf '%s' "$2"; wait"#;
     let command: Vec<String> = [
