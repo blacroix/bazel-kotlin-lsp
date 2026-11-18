@@ -1,0 +1,11 @@
+id = "bazel-kotlin"
+name = "Bazel Kotlin"
+version = "0.1.0"
+schema_version = 1
+authors = ["Benjamin Lacroix"]
+description = "Cross-module Kotlin navigation for Bazel (Bzlmod) repositories, through JetBrains' kotlin-lsp."
+repository = "https://github.com/blacroix/bazel-kotlin-lsp"
+
+[language_servers.bazel-kotlin-lsp]
+name = "Bazel Kotlin LSP"
+languages = ["Kotlin"]
