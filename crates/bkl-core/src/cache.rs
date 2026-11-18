@@ -13,6 +13,8 @@ const OWNER_FILE: &str = "owner.json";
 /// Prefix of a workspace folder renamed for deletion; an interrupted deletion leaves it behind.
 pub const TRASH_PREFIX: &str = ".trash-";
 const DAY_SECS: u64 = 24 * 3600;
+/// kotlin-lsp instances that can run on one workspace at once, each with its own index.
+const MAX_INDEX_DIRS: usize = 8;
 /// A cache whose workspace and its parent folder are both missing is kept this long after its last use, in case
 /// they come back (a drive that is not mounted).
 const GONE_GRACE_SECS: u64 = 3 * DAY_SECS;
@@ -73,6 +75,28 @@ impl CacheLayout {
     /// kotlin-lsp's index for this workspace, kept here so removing the folder removes it too.
     pub fn kotlin_lsp_index_dir(&self) -> PathBuf {
         self.dir.join("kotlin-lsp-index")
+    }
+
+    /// An index folder no other running kotlin-lsp uses, locked until the returned file is dropped: kotlin-lsp
+    /// fails to start on an index another instance has open (two windows on one folder). `None` if all are taken.
+    pub fn lock_index_dir(&self) -> Option<(PathBuf, std::fs::File)> {
+        std::fs::create_dir_all(&self.dir).ok()?;
+        (1..=MAX_INDEX_DIRS).find_map(|n| {
+            let dir = match n {
+                1 => self.kotlin_lsp_index_dir(),
+                n => self.dir.join(format!("kotlin-lsp-index-{n}")),
+            };
+            let mut lock_name = dir.file_name()?.to_os_string();
+            lock_name.push(".lock");
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(self.dir.join(lock_name))
+                .ok()?;
+            file.try_lock().ok()?;
+            Some((dir, file))
+        })
     }
 
     pub fn scope_decision_file(&self) -> PathBuf {
@@ -379,5 +403,18 @@ mod tests {
             layout.kotlin_lsp_index_dir(),
             layout.dir.join("kotlin-lsp-index")
         );
+    }
+
+    #[test]
+    fn index_dirs_are_handed_out_one_per_holder() {
+        let root = tempfile::tempdir().unwrap();
+        let layout = CacheLayout::for_workspace(root.path(), Path::new("/ws"));
+        let (first, _first_lock) = layout.lock_index_dir().unwrap();
+        assert_eq!(first, layout.kotlin_lsp_index_dir());
+        let (second, second_lock) = layout.lock_index_dir().unwrap();
+        assert_eq!(second, layout.dir.join("kotlin-lsp-index-2"));
+        drop(second_lock);
+        let (again, _again_lock) = layout.lock_index_dir().unwrap();
+        assert_eq!(again, second, "a released folder is reused");
     }
 }

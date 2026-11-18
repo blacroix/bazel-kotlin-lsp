@@ -101,6 +101,44 @@ fn kotlin_lsp_index_is_kept_in_the_workspace_cache() {
 }
 
 #[test]
+fn two_proxies_on_one_workspace_get_their_own_index() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let first_rec = dir.join("first");
+    let mut first = spawn_proxy(dir, RECORD, &[first_rec.to_str().unwrap()]);
+    let mut stdin = first.stdin.take().unwrap();
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+    stdin.write_all(&framed(&initialize.to_string())).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let first_index = loop {
+        let received = std::fs::read(&first_rec)
+            .map(|b| messages(&b))
+            .unwrap_or_default();
+        if let Some(msg) = received.first() {
+            break msg["params"]["initializationOptions"]["indexDir"].clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the first proxy never forwarded initialize"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+
+    let received = initialize_through_proxy(dir, json!({}));
+    let second_index = &received[0]["params"]["initializationOptions"]["indexDir"];
+    assert_eq!(
+        first_index,
+        json!(paths(dir).layout.kotlin_lsp_index_dir().to_str().unwrap())
+    );
+    assert!(second_index.is_string(), "{received:?}");
+    assert_ne!(&first_index, second_index);
+
+    drop(stdin);
+    assert!(wait_with_timeout(&mut first, Duration::from_secs(20)).success());
+}
+
+#[test]
 fn proxy_start_removes_stale_caches() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path();

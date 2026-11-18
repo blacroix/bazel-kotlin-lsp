@@ -138,12 +138,23 @@ pub fn run(opts: ProxyOptions) -> i32 {
         .clone()
         .or_else(platform_cache_root)
         .map(|cache_root| std::thread::spawn(move || remove_stale_caches(cache_root)));
+    // Held until the proxy exits: kotlin-lsp keeps the index open while it runs.
+    let mut _index_lock = None;
     let mode = match locate(&opts.sync) {
-        Ok(Located::Bzlmod(paths)) => Mode::Bazel(
-            BazelMode::new(paths.model_dir, Arc::new(BazelSyncer(opts.sync)))
-                .with_watch(paths.root, DEBOUNCE)
-                .with_index_dir(paths.layout.kotlin_lsp_index_dir()),
-        ),
+        Ok(Located::Bzlmod(paths)) => {
+            let mut bazel = BazelMode::new(paths.model_dir, Arc::new(BazelSyncer(opts.sync)))
+                .with_watch(paths.root, DEBOUNCE);
+            match paths.layout.lock_index_dir() {
+                Some((dir, lock)) => {
+                    _index_lock = Some(lock);
+                    bazel = bazel.with_index_dir(dir);
+                }
+                None => {
+                    log("every index folder of this workspace is in use; kotlin-lsp picks its own")
+                }
+            }
+            Mode::Bazel(bazel)
+        }
         Ok(Located::NotBzlmod(why)) => {
             log(&format!("{why}; passing messages through unchanged"));
             Mode::PassThrough
