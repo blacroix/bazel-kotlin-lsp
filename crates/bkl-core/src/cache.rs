@@ -99,6 +99,11 @@ impl CacheLayout {
         })
     }
 
+    /// Library files written for editors that cannot open kotlin-lsp's `jar:` addresses.
+    pub fn library_sources_dir(&self) -> PathBuf {
+        self.dir.join("library-sources")
+    }
+
     pub fn scope_decision_file(&self) -> PathBuf {
         self.dir.join("scope-decision.json")
     }

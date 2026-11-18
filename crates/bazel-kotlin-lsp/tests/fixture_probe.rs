@@ -140,19 +140,9 @@ fn open(client: &Client, root: &Path, file: &str) {
         .unwrap();
 }
 
-/// Pins that kotlin-lsp re-imports a rewritten workspace.json by itself: if a kotlin-lsp upgrade breaks this, the
-/// proxy needs to restart it after a model change.
-#[test]
-#[ignore = "needs Bazel, network and KOTLIN_LSP"]
-fn model_change_is_picked_up_live() {
-    let s = Synced::new();
+/// kotlin-lsp behind the proxy on the synced fixture, initialized.
+fn proxied(s: &Synced, scratch: &Path) -> Client {
     let root = s.fixture.path();
-    std::fs::write(
-        root.join(AREA),
-        "package fixture.greeting\n\nimport fixture.shapes.Shape\n\nfun describe(shape: Shape): String = shape.name\n",
-    )
-    .unwrap();
-    let scratch = tempfile::tempdir().unwrap();
     let server: Vec<String> = vec![
         env!("CARGO_BIN_EXE_bazel-kotlin-lsp").into(),
         "proxy".into(),
@@ -165,9 +155,9 @@ fn model_change_is_picked_up_live() {
         "--".into(),
         kotlin_lsp().to_string_lossy().into_owned(),
         "--stdio".into(),
-        format!("--system-path={}", scratch.path().join("system").display()),
+        format!("--system-path={}", scratch.join("system").display()),
     ];
-    let client = Client::spawn(&server, Some(&server_log(scratch.path()))).unwrap();
+    let client = Client::spawn(&server, Some(&server_log(scratch))).unwrap();
     let init = client
         .request(
             "initialize",
@@ -175,7 +165,7 @@ fn model_change_is_picked_up_live() {
                 "processId": std::process::id(),
                 "rootUri": file_uri(root),
                 "workspaceFolders": [{"uri": file_uri(root), "name": "fixture"}],
-                "initializationOptions": {"indexDir": scratch.path().join("index")},
+                "initializationOptions": {"indexDir": scratch.join("index")},
                 "capabilities": {
                     "workspace": {"configuration": true, "workspaceFolders": true},
                     "window": {"workDoneProgress": true},
@@ -190,6 +180,23 @@ fn model_change_is_picked_up_live() {
     client
         .notify("workspace/didChangeConfiguration", json!({"settings": {}}))
         .unwrap();
+    client
+}
+
+/// Pins that kotlin-lsp re-imports a rewritten workspace.json by itself: if a kotlin-lsp upgrade breaks this, the
+/// proxy needs to restart it after a model change.
+#[test]
+#[ignore = "needs Bazel, network and KOTLIN_LSP"]
+fn model_change_is_picked_up_live() {
+    let s = Synced::new();
+    let root = s.fixture.path();
+    std::fs::write(
+        root.join(AREA),
+        "package fixture.greeting\n\nimport fixture.shapes.Shape\n\nfun describe(shape: Shape): String = shape.name\n",
+    )
+    .unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let client = proxied(&s, scratch.path());
     let app = "app/src/main/kotlin/fixture/app/App.kt";
     open(&client, root, app);
     open(&client, root, AREA);
@@ -243,5 +250,61 @@ fn model_change_is_picked_up_live() {
     assert!(
         after.0,
         "the new dependency was not picked up within 60 s: {after:?}"
+    );
+}
+
+/// Zed opens only `file:` addresses: library locations must name a real file, and navigation must work from it.
+#[test]
+#[ignore = "needs Bazel, network and KOTLIN_LSP"]
+fn library_files_open_through_the_proxy() {
+    let s = Synced::new();
+    let root = s.fixture.path();
+    let scratch = tempfile::tempdir().unwrap();
+    let client = proxied(&s, scratch.path());
+    let app = "app/src/main/kotlin/fixture/app/App.kt";
+    open(&client, root, app);
+    let (found, targets) = definition(
+        &client,
+        root,
+        app,
+        "import kotlinx.serialization.SerialName",
+        "SerialName",
+        "-sources.jar!/",
+        Instant::now() + Duration::from_secs(400),
+    );
+    assert!(found, "{targets:?}");
+    let target = targets
+        .iter()
+        .find(|t| t.contains("-sources.jar!/"))
+        .unwrap();
+    assert!(target.starts_with("file:///"), "{target}");
+    let library_file = PathBuf::from(target.strip_prefix("file://").unwrap());
+    let text = std::fs::read_to_string(&library_file).unwrap();
+    assert!(
+        text.contains("annotation class SerialName"),
+        "{}",
+        library_file.display()
+    );
+
+    client
+        .notify(
+            "textDocument/didOpen",
+            json!({"textDocument": {"uri": file_uri(&library_file), "languageId": "kotlin", "version": 1, "text": text}}),
+        )
+        .unwrap();
+    let (line, character) = position_of(&text, "@MustBeDocumented", "MustBeDocumented").unwrap();
+    let (found, targets) = definition_case(
+        &client,
+        &file_uri(&library_file),
+        line,
+        character,
+        "kotlin-stdlib-sources.jar!/",
+        Instant::now() + Duration::from_secs(60),
+    );
+    client.shutdown();
+    assert!(found, "{targets:?}");
+    assert!(
+        targets.iter().all(|t| t.starts_with("file:///")),
+        "{targets:?}"
     );
 }

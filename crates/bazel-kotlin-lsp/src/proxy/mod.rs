@@ -4,6 +4,7 @@
 
 mod control;
 pub mod init;
+mod library;
 mod report;
 mod schedule;
 mod watch;
@@ -11,7 +12,7 @@ mod watch;
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,7 @@ use crate::sync::{
     run_sync,
 };
 use control::Event;
+use library::{Library, Out, Relay};
 
 const DEBOUNCE: Duration = Duration::from_secs(2);
 
@@ -54,6 +56,7 @@ pub struct BazelMode {
     model_uri: String,
     /// kotlin-lsp's `indexDir`, unless the client sets one.
     index_dir: Option<PathBuf>,
+    library_dir: Option<PathBuf>,
     syncer: Arc<dyn Syncer>,
     watch: Option<WatchSpec>,
 }
@@ -70,6 +73,7 @@ impl BazelMode {
             model_uri: file_uri(&model_dir),
             model_dir,
             index_dir: None,
+            library_dir: None,
             syncer,
             watch: None,
         }
@@ -78,6 +82,12 @@ impl BazelMode {
     /// Keeps kotlin-lsp's index in `dir`, so removing the workspace's cache removes it too.
     pub fn with_index_dir(mut self, dir: PathBuf) -> Self {
         self.index_dir = Some(dir);
+        self
+    }
+
+    /// Writes library files kotlin-lsp names by `jar:` addresses under `dir`, for editors that open only files.
+    pub fn with_library_dir(mut self, dir: PathBuf) -> Self {
+        self.library_dir = Some(dir);
         self
     }
 
@@ -125,6 +135,8 @@ pub fn write_placeholder(model_dir: &Path) -> io::Result<bool> {
 }
 
 type Shared<W> = Arc<Mutex<W>>;
+/// kotlin-lsp's input, until the editor closes its side.
+type SharedIn = Arc<Mutex<Option<ChildStdin>>>;
 
 pub fn log(message: &str) {
     eprintln!("bazel-kotlin-lsp: {message}");
@@ -143,7 +155,8 @@ pub fn run(opts: ProxyOptions) -> i32 {
     let mode = match locate(&opts.sync) {
         Ok(Located::Bzlmod(paths)) => {
             let mut bazel = BazelMode::new(paths.model_dir, Arc::new(BazelSyncer(opts.sync)))
-                .with_watch(paths.root, DEBOUNCE);
+                .with_watch(paths.root, DEBOUNCE)
+                .with_library_dir(paths.layout.library_sources_dir());
             match paths.layout.lock_index_dir() {
                 Some((dir, lock)) => {
                     _index_lock = Some(lock);
@@ -241,18 +254,51 @@ where
             let (events, handle) =
                 control::spawn(bazel.syncer.clone(), bazel.watch.take(), client_out.clone());
             let to_control = events.clone();
+            let library = bazel
+                .library_dir
+                .take()
+                .map(|dir| Arc::new(Library::new(dir)));
+            let child_in: SharedIn = Arc::new(Mutex::new(Some(child_in)));
+            let to_child = child_in.clone();
+            let client_library = library.clone();
             std::thread::spawn(move || {
                 let inject = Injection {
                     model_uri: bazel.model_uri,
                     index_dir: bazel.index_dir,
                 };
-                pump_client(client_in, child_in, &inject, &to_control);
+                pump_client(
+                    client_in,
+                    &to_child,
+                    &inject,
+                    &to_control,
+                    client_library.as_deref(),
+                );
+                to_child.lock().unwrap().take();
                 let _ = closed_tx.send(());
             });
-            std::thread::spawn(move || {
-                pump_child(child_out, &client_out);
-                drop(drained_tx);
-            });
+            match library {
+                Some(library) => {
+                    let (bodies, from_child) = mpsc::channel();
+                    std::thread::spawn(move || {
+                        let mut reader = BufReader::new(child_out);
+                        while let Ok(Some(body)) = read_body(&mut reader) {
+                            if bodies.send(body).is_err() {
+                                return;
+                            }
+                        }
+                    });
+                    std::thread::spawn(move || {
+                        relay_child(&from_child, Relay::new(library), &child_in, &client_out);
+                        drop(drained_tx);
+                    });
+                }
+                None => {
+                    std::thread::spawn(move || {
+                        pump_child(child_out, &client_out);
+                        drop(drained_tx);
+                    });
+                }
+            }
             Some((events, handle))
         }
     };
@@ -302,9 +348,10 @@ struct Envelope {
 
 fn pump_client(
     client_in: impl Read,
-    mut child_in: ChildStdin,
+    child_in: &SharedIn,
     inject: &Injection,
     control: &Sender<Event>,
+    library: Option<&Library>,
 ) {
     let mut reader = BufReader::new(client_in);
     loop {
@@ -316,10 +363,13 @@ fn pump_client(
                 return;
             }
         };
-        let Some(body) = from_client(body, inject, control) else {
+        let Some(mut body) = from_client(body, inject, control) else {
             continue;
         };
-        if write_body(&mut child_in, &body).is_err() {
+        if let Some(library) = library {
+            body = library.to_server(body);
+        }
+        if !write_child(child_in, &body) {
             return;
         }
     }
@@ -381,6 +431,44 @@ fn initialize(body: Vec<u8>, inject: &Injection, control: &Sender<Event>) -> Vec
         init::inject_index_dir(params, dir);
     }
     serde_json::to_vec(&msg).unwrap_or(body)
+}
+
+fn write_child(child_in: &SharedIn, body: &[u8]) -> bool {
+    match child_in.lock().unwrap().as_mut() {
+        Some(child_in) => write_body(child_in, body).is_ok(),
+        None => false,
+    }
+}
+
+/// Forwards kotlin-lsp's messages, holding those that name library files until their text is written.
+fn relay_child<W: Write>(
+    from_child: &mpsc::Receiver<Vec<u8>>,
+    mut relay: Relay,
+    child_in: &SharedIn,
+    client_out: &Shared<W>,
+) {
+    loop {
+        let (out, last) = match from_child.recv_timeout(Duration::from_secs(1)) {
+            Ok(body) => (relay.child_message(body, Instant::now()), false),
+            Err(RecvTimeoutError::Timeout) => (relay.expire(Instant::now(), false), false),
+            Err(RecvTimeoutError::Disconnected) => (relay.expire(Instant::now(), true), true),
+        };
+        for o in out {
+            match o {
+                Out::Client(body) => {
+                    if write_body(&mut *client_out.lock().unwrap(), &body).is_err() {
+                        return;
+                    }
+                }
+                Out::Child(body) => {
+                    write_child(child_in, &body);
+                }
+            }
+        }
+        if last {
+            return;
+        }
+    }
 }
 
 fn pump_child<W: Write>(child_out: impl Read, client_out: &Shared<W>) {
