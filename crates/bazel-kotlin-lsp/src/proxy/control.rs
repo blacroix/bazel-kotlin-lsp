@@ -59,6 +59,7 @@ pub fn spawn<W: Write + Send + 'static>(
             scheduler: Scheduler::new(debounce),
             watching,
             running: None,
+            synced_once: false,
         }
         .run(rx)
     });
@@ -150,6 +151,7 @@ struct Control<W> {
     scheduler: Scheduler,
     watching: Option<Watching>,
     running: Option<Cancel>,
+    synced_once: bool,
 }
 
 impl<W: Write> Control<W> {
@@ -191,6 +193,12 @@ impl<W: Write> Control<W> {
                     log_result(&result);
                     if let (Ok(outcome), Some(watching)) = (&*result, &mut self.watching) {
                         watching.add_modules(&outcome.local_module_dirs);
+                    }
+                    if let Ok(outcome) = &*result
+                        && !std::mem::replace(&mut self.synced_once, true)
+                        && !outcome.summary.changed
+                    {
+                        request_reimport(&outcome.model_dir);
                     }
                     self.reporter.sync_done(&result)
                 }
@@ -246,6 +254,22 @@ impl<W: Write> Control<W> {
         for msg in messages {
             let _ = write_message(&mut *self.client_out.lock().unwrap(), msg);
         }
+    }
+}
+
+/// kotlin-lsp imported the model at startup, possibly while this first sync had Bazel re-fetching the jars it
+/// names; touching the model makes kotlin-lsp import it again once they are back.
+fn request_reimport(model_dir: &Path) {
+    let file = model_dir.join("workspace.json");
+    let touched = std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+    if let Err(e) = touched {
+        log(&format!(
+            "asking kotlin-lsp to re-import {}: {e}",
+            file.display()
+        ));
     }
 }
 

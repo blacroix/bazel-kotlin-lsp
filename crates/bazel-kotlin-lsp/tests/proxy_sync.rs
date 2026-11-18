@@ -367,3 +367,60 @@ fn closing_the_editor_cancels_a_running_sync() {
         "the sync was not cancelled"
     );
 }
+
+fn modified(path: &Path) -> std::time::SystemTime {
+    std::fs::metadata(path).unwrap().modified().unwrap()
+}
+
+/// Waits for the placeholder model, then dates it far in the past; returns its path and that date.
+fn aged_model(h: &Harness) -> (PathBuf, std::time::SystemTime) {
+    let file = h.model_dir.join("workspace.json");
+    let deadline = std::time::Instant::now() + WAIT;
+    while !file.exists() {
+        assert!(std::time::Instant::now() < deadline, "no placeholder model");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let old = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    (file, old)
+}
+
+fn first_sync(h: &Harness, changed: bool) {
+    let mut done = outcome("ok", None);
+    done.model_dir = h.model_dir.clone();
+    done.summary.changed = changed;
+    h.step(Step::Finish(Box::new(Ok(done))));
+}
+
+#[test]
+fn an_unchanged_first_sync_makes_kotlin_lsp_reimport() {
+    let mut h = Harness::start();
+    let (file, old) = aged_model(&h);
+    h.initialize(false);
+    first_sync(&h, false);
+    let deadline = std::time::Instant::now() + WAIT;
+    while modified(&file) == old {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the model was not touched after an unchanged first sync"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    h.finish();
+}
+
+#[test]
+fn a_rewritten_model_is_not_touched_again() {
+    let mut h = Harness::start();
+    let (file, old) = aged_model(&h);
+    h.initialize(false);
+    first_sync(&h, true);
+    h.assert_quiet();
+    assert_eq!(modified(&file), old);
+    h.finish();
+}
