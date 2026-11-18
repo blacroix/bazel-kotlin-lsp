@@ -11,12 +11,12 @@ go-to-definition, completion and find-usages work across Bazel modules and into 
 You need Bazel 8 or later (`bazelisk` or `bazel` on your `PATH`) and Zed's **Kotlin** extension (Zed: Extensions,
 search "Kotlin"), which gives Zed the Kotlin language.
 
-### With the Zed extension
-
 The `extension` folder is a Zed extension, "Bazel Kotlin". On first use it downloads this project's release for your
-platform and kotlin-lsp 271.2085.0, then runs them for every Kotlin file. Until it is listed in Zed's extension
-registry, install it from a clone; Zed builds it with Rust, which must be installed through
-[rustup](https://rustup.rs):
+platform and kotlin-lsp 271.2085.0, then runs them for every Kotlin file.
+
+Until it is listed in Zed's extension registry, install it from a clone. Zed builds it with Rust, which must come from
+[rustup](https://rustup.rs) and answer outside any project: if `rustc` on your `PATH` is a mise (or asdf) shim, give it
+a global version first, for example `mise use -g rust@stable`.
 
 ```sh
 git clone https://github.com/blacroix/bazel-kotlin-lsp
@@ -35,69 +35,13 @@ In Zed, run `zed: install dev extension` and pick the clone's `extension` folder
 }
 ```
 
-Optional settings, all under `"lsp": {"bazel-kotlin-lsp": {...}}`: `"settings"` takes `bazel_path`, `scope_dirs`,
-`targets` (the `sync` flags below) and `kotlin_lsp_path`; `"binary": {"path": ...}` runs your own build of the proxy.
-
-### By hand
-
-**1. The proxy.** Pick your platform's target (`aarch64-apple-darwin`, `x86_64-apple-darwin`,
-`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`) and download the latest release:
-
-```sh
-version=0.1.0
-target=aarch64-apple-darwin
-mkdir -p ~/.local/bin
-curl -fsSL "https://github.com/blacroix/bazel-kotlin-lsp/releases/download/v$version/bazel-kotlin-lsp-$version-$target.tar.gz" \
-  | tar -xz -C ~/.local/bin
-~/.local/bin/bazel-kotlin-lsp --version
-```
-
-Use `curl` as above rather than a browser: macOS blocks unsigned binaries downloaded by a browser (if you did, run
-`xattr -d com.apple.quarantine ~/.local/bin/bazel-kotlin-lsp`). With a Rust 1.99 toolchain you can instead build it:
-`cargo install --git https://github.com/blacroix/bazel-kotlin-lsp bazel-kotlin-lsp`.
-
-**2. kotlin-lsp 271.2085.0**, the version this project is tested with:
-
-```sh
-v=271.2085.0
-mkdir -p ~/.local/share/kotlin-lsp && cd ~/.local/share/kotlin-lsp
-# macOS, Apple silicon (drop "-aarch64" on Intel):
-curl -fsSL -o kotlin-lsp.zip "https://download.jetbrains.com/language-server/kotlin-server/$v/kotlin-server-$v-aarch64.sit"
-ditto -x -k kotlin-lsp.zip . && rm kotlin-lsp.zip
-# Linux x86_64 (on arm64, add "-aarch64" before ".tar.gz"):
-# curl -fsSL "https://download.jetbrains.com/language-server/kotlin-server/$v/kotlin-server-$v.tar.gz" | tar -xz
-ls "kotlin-server-$v/bin/intellij-server"
-```
-
-**3. Zed settings** (`zed: open settings`). Replace `HOME` with your home folder (`echo $HOME`); Zed does not expand `~`:
-
-```json
-{
-  "lsp": {
-    "kotlin-lsp": {
-      "binary": {
-        "path": "HOME/.local/bin/bazel-kotlin-lsp",
-        "arguments": [
-          "proxy",
-          "--",
-          "HOME/.local/share/kotlin-lsp/kotlin-server-271.2085.0/bin/intellij-server",
-          "--stdio"
-        ]
-      }
-    }
-  },
-  "languages": {
-    "Kotlin": {
-      "language_servers": ["kotlin-lsp", "!kotlin-language-server", "..."]
-    }
-  }
-}
-```
-
 Open your Bazel repository in Zed and open a Kotlin file. The first sync and indexing take about a minute ("Bazel sync"
 then indexing in the status bar); after that, go-to-definition works across modules and into library sources. If a
 sync fails, a notification shows Bazel's error with an "Open log" button. Outside Bazel repositories the proxy passes
 everything through, so this setting is safe for every project.
+
+Optional settings, all under `"lsp": {"bazel-kotlin-lsp": {...}}`: `"settings"` takes `bazel_path`, `scope_dirs`,
+`targets` (the `sync` flags below) and `kotlin_lsp_path`; `"binary": {"path": ...}` runs your own build of the proxy.
 
 ## Usage
 
@@ -120,6 +64,9 @@ LSP messages to stdout; its own notes and kotlin-lsp's go to stderr (Zed's langu
 goes to `sync.log` in the cache folder.
 
 ### On the command line
+
+Each [release](https://github.com/blacroix/bazel-kotlin-lsp/releases) has the `bazel-kotlin-lsp` binary for macOS and
+Linux (download it with `curl`: macOS blocks unsigned binaries a browser downloaded).
 
 ```sh
 bazel-kotlin-lsp sync --workspace /path/to/repo
