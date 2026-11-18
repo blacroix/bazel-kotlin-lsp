@@ -50,7 +50,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       USE_BAZEL_VERSION: "9.3.2"
-      BKL_PROBE_LOG_DIR: ${{ runner.temp }}/probe-logs
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
@@ -59,6 +58,8 @@ jobs:
           path: .cache/kotlin-lsp
           key: kotlin-lsp-271.2085.0-${{ runner.os }}-${{ runner.arch }}
       - run: mise run probe
+        env:
+          BKL_PROBE_LOG_DIR: ${{ runner.temp }}/probe-logs
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
