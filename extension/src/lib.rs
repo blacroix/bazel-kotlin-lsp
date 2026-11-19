@@ -57,9 +57,9 @@ fn kotlin_lsp_archive(os: Os, arch: Architecture) -> Result<(String, DownloadedF
     ))
 }
 
-/// The proxy's arguments: its sync flags, then the kotlin-lsp command after `--`.
-fn proxy_args(options: &Options, kotlin_lsp: &str) -> Vec<String> {
-    let mut args = vec!["proxy".to_string()];
+/// The proxy's arguments: its flags, then the kotlin-lsp command after `--`.
+fn proxy_args(server: &str, options: &Options, kotlin_lsp: &str) -> Vec<String> {
+    let mut args = vec!["proxy".to_string(), "--zed-server".into(), server.into()];
     if let Some(bazel) = &options.bazel_path {
         args.extend(["--bazel".to_string(), bazel.clone()]);
     }
@@ -178,7 +178,7 @@ impl zed::Extension for BazelKotlin {
         zed::set_language_server_installation_status(id, &LanguageServerInstallationStatus::None);
         Ok(zed::Command {
             command: proxy,
-            args: proxy_args(&options, &kotlin_lsp),
+            args: proxy_args(id.as_ref(), &options, &kotlin_lsp),
             env: worktree.shell_env(),
         })
     }
@@ -234,8 +234,19 @@ mod tests {
     #[test]
     fn proxy_args_carry_the_settings_then_kotlin_lsp() {
         assert_eq!(
-            proxy_args(&Options::default(), "/k/intellij-server"),
-            ["proxy", "--", "/k/intellij-server", "--stdio"]
+            proxy_args(
+                "bazel-kotlin-lsp",
+                &Options::default(),
+                "/k/intellij-server"
+            ),
+            [
+                "proxy",
+                "--zed-server",
+                "bazel-kotlin-lsp",
+                "--",
+                "/k/intellij-server",
+                "--stdio"
+            ]
         );
         let options = Options {
             bazel_path: Some("/opt/bazel".into()),
@@ -244,9 +255,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            proxy_args(&options, "/k/intellij-server"),
+            proxy_args("bazel-kotlin-lsp", &options, "/k/intellij-server"),
             [
                 "proxy",
+                "--zed-server",
+                "bazel-kotlin-lsp",
                 "--bazel",
                 "/opt/bazel",
                 "--scope-dir",

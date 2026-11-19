@@ -35,6 +35,10 @@ then reports "No extension manifest found"). Then make it the Kotlin server (`ze
 }
 ```
 
+Zed's own default also runs the Kotlin extension's kotlin-lsp, and an extension cannot change your settings: without
+this line each Kotlin file gets two servers. In a Bazel repository the proxy reads Zed's settings and, if the line is
+missing, shows it in a notification with an "Open settings" button (and "Don't show again").
+
 Open your Bazel repository in Zed and open a Kotlin file. The first sync and indexing take about a minute ("Bazel sync"
 then indexing in the status bar); after that, go-to-definition works across modules and into library sources, which
 open read-only. If a
