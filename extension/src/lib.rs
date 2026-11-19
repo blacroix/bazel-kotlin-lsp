@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use zed_extension_api::lsp::{Completion, CompletionKind};
 use zed_extension_api::settings::LspSettings;
 use zed_extension_api::{
     self as zed, Architecture, DownloadedFileType, LanguageServerId,
@@ -182,6 +183,65 @@ impl zed::Extension for BazelKotlin {
             env: worktree.shell_env(),
         })
     }
+
+    fn label_for_completion(
+        &self,
+        _id: &LanguageServerId,
+        completion: Completion,
+    ) -> Option<zed::CodeLabel> {
+        let details = completion.label_details.as_ref();
+        completion_label(
+            &completion.label,
+            completion.kind.as_ref(),
+            details.and_then(|d| d.detail.as_deref()),
+            details.and_then(|d| d.description.as_deref()),
+        )
+    }
+}
+
+/// The completion menu label: Zed's own leaves out `labelDetails.detail`, where kotlin-lsp puts the package.
+fn completion_label(
+    label: &str,
+    kind: Option<&CompletionKind>,
+    detail: Option<&str>,
+    description: Option<&str>,
+) -> Option<zed::CodeLabel> {
+    let detail = detail.filter(|d| !d.is_empty());
+    let description = description.filter(|d| !d.is_empty());
+    if detail.is_none() && description.is_none() {
+        return None;
+    }
+    let dim = || Some("comment".to_string());
+    let mut spans = vec![zed::CodeLabelSpan::literal(
+        label,
+        kind.and_then(highlight).map(String::from),
+    )];
+    spans.extend(detail.map(|d| zed::CodeLabelSpan::literal(d, dim())));
+    spans.extend(description.map(|d| zed::CodeLabelSpan::literal(format!(" {d}"), dim())));
+    Some(zed::CodeLabel {
+        code: String::new(),
+        spans,
+        filter_range: (0..label.len()).into(),
+    })
+}
+
+/// The highlight Zed's own label gives a completion of this kind.
+fn highlight(kind: &CompletionKind) -> Option<&'static str> {
+    match kind {
+        CompletionKind::Class
+        | CompletionKind::Interface
+        | CompletionKind::Struct
+        | CompletionKind::Enum => Some("type"),
+        CompletionKind::Constant => Some("constant"),
+        CompletionKind::Constructor => Some("constructor"),
+        CompletionKind::EnumMember | CompletionKind::Field | CompletionKind::Property => {
+            Some("property")
+        }
+        CompletionKind::Function | CompletionKind::Method => Some("function"),
+        CompletionKind::Variable => Some("variable"),
+        CompletionKind::Keyword => Some("keyword"),
+        _ => None,
+    }
 }
 
 zed::register_extension!(BazelKotlin);
@@ -189,6 +249,64 @@ zed::register_extension!(BazelKotlin);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text(label: &zed::CodeLabel) -> String {
+        label
+            .spans
+            .iter()
+            .map(|span| match span {
+                zed::CodeLabelSpan::Literal(literal) => literal.text.as_str(),
+                zed::CodeLabelSpan::CodeRange(_) => panic!("labels are literals"),
+            })
+            .collect()
+    }
+
+    fn highlights(label: &zed::CodeLabel) -> Vec<Option<&str>> {
+        label
+            .spans
+            .iter()
+            .map(|span| match span {
+                zed::CodeLabelSpan::Literal(literal) => literal.highlight_name.as_deref(),
+                zed::CodeLabelSpan::CodeRange(_) => panic!("labels are literals"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_class_label_shows_its_package() {
+        let label = completion_label(
+            "UserId",
+            Some(&CompletionKind::Class),
+            Some(" (com.example.session)"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(text(&label), "UserId (com.example.session)");
+        assert_eq!(highlights(&label), [Some("type"), Some("comment")]);
+        assert_eq!((label.filter_range.start, label.filter_range.end), (0, 6));
+    }
+
+    #[test]
+    fn a_function_label_shows_its_parameters_package_and_type() {
+        let label = completion_label(
+            "describe",
+            Some(&CompletionKind::Function),
+            Some("(shape: Shape) (fixture.app)"),
+            Some("Report"),
+        )
+        .unwrap();
+        assert_eq!(text(&label), "describe(shape: Shape) (fixture.app) Report");
+        assert_eq!(
+            highlights(&label),
+            [Some("function"), Some("comment"), Some("comment")]
+        );
+    }
+
+    #[test]
+    fn without_label_details_zed_keeps_its_own_label() {
+        assert!(completion_label("x", Some(&CompletionKind::Variable), None, None).is_none());
+        assert!(completion_label("x", None, Some(""), Some("")).is_none());
+    }
 
     #[test]
     fn every_supported_platform_has_a_release_target() {
