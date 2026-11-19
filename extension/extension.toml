@@ -1,6 +1,6 @@
 id = "bazel-kotlin"
 name = "Bazel Kotlin"
-version = "0.1.3"
+version = "0.1.4"
 schema_version = 1
 authors = ["Benjamin Lacroix"]
 description = "Cross-module Kotlin navigation for Bazel (Bzlmod) repositories, through JetBrains' kotlin-lsp."
