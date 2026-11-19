@@ -16,15 +16,24 @@ const SHOWN_LINES: usize = 5;
 const ERROR: u8 = 1;
 const WARNING: u8 = 2;
 const OPEN_LOG: &str = "Open log";
+const OPEN_SETTINGS: &str = "Open settings";
+const MUTE: &str = "Don't show again";
 const OK: &str = "OK";
+
+/// A one-off warning about the editor's setup, with a settings file to open and a file whose presence mutes it.
+pub struct Notice {
+    pub text: String,
+    pub settings: PathBuf,
+    pub mute: PathBuf,
+}
 
 #[derive(Default)]
 pub struct Reporter {
     ready: bool,
     work_done_progress: bool,
     show_document: bool,
-    /// Unanswered prompts, by request id, with the log their "Open log" opens.
-    prompts: BTreeMap<String, Option<PathBuf>>,
+    /// Unanswered prompts' buttons, by request id.
+    prompts: BTreeMap<String, Actions>,
     /// The last prompt shown since the last successful sync.
     last_prompt: Option<String>,
     syncing: bool,
@@ -35,8 +44,20 @@ pub struct Reporter {
     queued: Vec<Prompt>,
 }
 
-/// (message type, Markdown text, log).
-type Prompt = (u8, String, Option<PathBuf>);
+struct Prompt {
+    kind: u8,
+    /// Markdown.
+    text: String,
+    actions: Actions,
+}
+
+#[derive(Default)]
+struct Actions {
+    /// A button's title and the file it opens.
+    open: Option<(&'static str, PathBuf)>,
+    /// The file "Don't show again" creates.
+    mute: Option<PathBuf>,
+}
 
 #[derive(Default)]
 enum ProgressState {
@@ -69,6 +90,26 @@ impl Reporter {
         out
     }
 
+    pub fn notice(&mut self, notice: Notice) -> Vec<Value> {
+        let prompt = Prompt {
+            kind: WARNING,
+            text: notice.text,
+            actions: Actions {
+                open: notice
+                    .settings
+                    .is_file()
+                    .then_some((OPEN_SETTINGS, notice.settings)),
+                mute: Some(notice.mute),
+            },
+        };
+        if self.ready {
+            vec![self.show(prompt)]
+        } else {
+            self.queued.push(prompt);
+            vec![]
+        }
+    }
+
     pub fn sync_started(&mut self) -> Vec<Value> {
         self.syncing = true;
         self.phase = None;
@@ -87,16 +128,28 @@ impl Reporter {
 
     /// The client's reply to one of the proxy's requests.
     pub fn response(&mut self, id: &str, ok: bool, result: Option<&Value>) -> Vec<Value> {
-        if let Some(log) = self.prompts.remove(id) {
-            let chose_open =
-                result.and_then(|r| r.get("title")).and_then(Value::as_str) == Some(OPEN_LOG);
-            return match (chose_open, log) {
-                (true, Some(log)) => vec![self.request(
+        if let Some(actions) = self.prompts.remove(id) {
+            let chose = result.and_then(|r| r.get("title")).and_then(Value::as_str);
+            if let Some((title, file)) = &actions.open
+                && chose == Some(*title)
+            {
+                return vec![self.request(
                     "window/showDocument",
-                    json!({"uri": super::file_uri(&log), "takeFocus": true}),
-                )],
-                _ => vec![],
-            };
+                    json!({"uri": super::file_uri(file), "takeFocus": true}),
+                )];
+            }
+            if let Some(mute) = &actions.mute
+                && chose == Some(MUTE)
+            {
+                let written = mute
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| std::fs::write(mute, ""));
+                if let Err(e) = written {
+                    super::log(&format!("writing {}: {e}", mute.display()));
+                }
+            }
+            return vec![];
         }
         let ProgressState::Creating { id: pending, token } = &self.progress else {
             return vec![];
@@ -133,9 +186,9 @@ impl Reporter {
             self.last_prompt = None;
         }
         if let Some(prompt) = prompt(result)
-            && self.last_prompt.as_ref() != Some(&prompt.1)
+            && self.last_prompt.as_ref() != Some(&prompt.text)
         {
-            self.last_prompt = Some(prompt.1.clone());
+            self.last_prompt = Some(prompt.text.clone());
             if self.ready {
                 out.push(self.show(prompt));
             } else {
@@ -145,18 +198,23 @@ impl Reporter {
         out
     }
 
-    fn show(&mut self, (kind, text, log): Prompt) -> Value {
-        let action = if self.show_document && log.is_some() {
-            OPEN_LOG
-        } else {
-            OK
-        };
+    fn show(&mut self, prompt: Prompt) -> Value {
+        let mut actions = prompt.actions;
+        if !self.show_document {
+            actions.open = None;
+        }
+        let mut titles: Vec<&str> = actions.open.iter().map(|(title, _)| *title).collect();
+        titles.extend(actions.mute.as_ref().map(|_| MUTE));
+        if titles.is_empty() {
+            titles.push(OK);
+        }
+        let buttons: Vec<Value> = titles.iter().map(|t| json!({"title": t})).collect();
         let message = self.request(
             "window/showMessageRequest",
-            json!({"type": kind, "message": text, "actions": [{"title": action}]}),
+            json!({"type": prompt.kind, "message": prompt.text, "actions": buttons}),
         );
         let id = message["id"].as_str().unwrap_or_default().to_string();
-        self.prompts.insert(id, log);
+        self.prompts.insert(id, actions);
         message
     }
 
@@ -206,23 +264,31 @@ fn end_message(result: &Result<SyncOutcome, SyncError>) -> String {
     }
 }
 
-/// (message type, Markdown text, log) of the prompt for a sync result, if it needs one.
+/// The prompt for a sync result, if it needs one.
 fn prompt(result: &Result<SyncOutcome, SyncError>) -> Option<Prompt> {
-    match result {
-        Err(e) => Some((ERROR, markdown("Bazel sync failed", e), e.log.clone())),
+    let (kind, text, log) = match result {
+        Err(e) => (ERROR, markdown("Bazel sync failed", e), e.log.clone()),
         Ok(o) if o.summary.status != "ok" => {
             let headline = "Bazel sync incomplete, navigation may miss some targets";
-            Some(match &o.summary.partial_reason {
+            match &o.summary.partial_reason {
                 Some(reason) => (WARNING, markdown(headline, reason), reason.log.clone()),
                 None => (
                     WARNING,
                     format!("**{headline}**\n\nLog: `{}`", o.summary.log.display()),
                     Some(o.summary.log.clone()),
                 ),
-            })
+            }
         }
-        Ok(_) => None,
-    }
+        Ok(_) => return None,
+    };
+    Some(Prompt {
+        kind,
+        text,
+        actions: Actions {
+            open: log.map(|log| (OPEN_LOG, log)),
+            mute: None,
+        },
+    })
 }
 
 /// Zed renders prompt text as Markdown.
@@ -401,6 +467,80 @@ mod tests {
             r.sync_done(&failure("other")).len(),
             1,
             "failing again after a success"
+        );
+    }
+
+    fn notice(dir: &std::path::Path) -> Notice {
+        let settings = dir.join("settings.json");
+        std::fs::write(&settings, "{}").unwrap();
+        Notice {
+            text: "two servers".into(),
+            settings,
+            mute: dir.join("muted"),
+        }
+    }
+
+    #[test]
+    fn a_notice_waits_for_initialized_and_offers_settings_and_silence() {
+        let t = tempfile::tempdir().unwrap();
+        let mut r = Reporter::default();
+        r.initialize(false, true);
+        assert!(r.notice(notice(t.path())).is_empty());
+        let out = r.initialized();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["params"]["type"], WARNING);
+        assert_eq!(out[0]["params"]["message"], "two servers");
+        assert_eq!(
+            out[0]["params"]["actions"],
+            json!([{"title": "Open settings"}, {"title": "Don't show again"}])
+        );
+    }
+
+    #[test]
+    fn open_settings_shows_the_settings_file() {
+        let t = tempfile::tempdir().unwrap();
+        let mut r = ready(true);
+        let n = notice(t.path());
+        let settings = n.settings.clone();
+        let prompt = r.notice(n).remove(0);
+        let out = r.response(
+            prompt["id"].as_str().unwrap(),
+            true,
+            Some(&json!({"title": "Open settings"})),
+        );
+        assert_eq!(out[0]["method"], "window/showDocument");
+        assert_eq!(out[0]["params"]["uri"], super::super::file_uri(&settings));
+        assert!(!t.path().join("muted").exists());
+    }
+
+    #[test]
+    fn dont_show_again_writes_the_mute_file() {
+        let t = tempfile::tempdir().unwrap();
+        let mut r = ready(false);
+        let prompt = r.notice(notice(t.path())).remove(0);
+        assert_eq!(
+            prompt["params"]["actions"],
+            json!([{"title": "Don't show again"}])
+        );
+        let out = r.response(
+            prompt["id"].as_str().unwrap(),
+            true,
+            Some(&json!({"title": "Don't show again"})),
+        );
+        assert!(out.is_empty());
+        assert!(t.path().join("muted").exists());
+    }
+
+    #[test]
+    fn a_missing_settings_file_is_not_offered() {
+        let t = tempfile::tempdir().unwrap();
+        let mut r = ready(true);
+        let mut n = notice(t.path());
+        n.settings = t.path().join("missing.json");
+        let prompt = r.notice(n).remove(0);
+        assert_eq!(
+            prompt["params"]["actions"],
+            json!([{"title": "Don't show again"}])
         );
     }
 

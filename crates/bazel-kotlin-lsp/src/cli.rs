@@ -42,6 +42,9 @@ pub struct GcArgs {
 pub struct ProxyArgs {
     #[command(flatten)]
     pub sync: SyncArgs,
+    /// The name Zed runs this server under: warns when Zed's settings also run another Kotlin server.
+    #[arg(long, value_name = "NAME")]
+    pub zed_server: Option<String>,
     /// The kotlin-lsp command and its arguments, after `--`.
     #[arg(last = true, required = true, value_name = "KOTLIN_LSP_COMMAND")]
     pub command: Vec<String>,

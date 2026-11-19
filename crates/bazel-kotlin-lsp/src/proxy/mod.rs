@@ -8,6 +8,7 @@ mod library;
 mod report;
 mod schedule;
 mod watch;
+pub mod zed;
 
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -25,8 +26,8 @@ use serde_json::Value;
 use crate::bazel::Cancel;
 use crate::gc::GcOptions;
 use crate::sync::{
-    Located, Progress, SyncError, SyncOptions, SyncOutcome, locate, now_secs, platform_cache_root,
-    run_sync,
+    Located, Progress, SyncError, SyncOptions, SyncOutcome, SyncPaths, locate, now_secs,
+    platform_cache_root, run_sync,
 };
 use control::Event;
 use library::{Library, Out, Relay};
@@ -42,6 +43,8 @@ const DRAIN_WAIT: Duration = Duration::from_secs(5);
 pub struct ProxyOptions {
     pub sync: SyncOptions,
     pub command: Vec<String>,
+    /// The name Zed runs this server under, when Zed's extension started it.
+    pub zed_server: Option<String>,
 }
 
 pub enum Mode {
@@ -57,6 +60,7 @@ pub struct BazelMode {
     /// kotlin-lsp's `indexDir`, unless the client sets one.
     index_dir: Option<PathBuf>,
     library_dir: Option<PathBuf>,
+    notice: Option<Box<report::Notice>>,
     syncer: Arc<dyn Syncer>,
     watch: Option<WatchSpec>,
 }
@@ -74,6 +78,7 @@ impl BazelMode {
             model_dir,
             index_dir: None,
             library_dir: None,
+            notice: None,
             syncer,
             watch: None,
         }
@@ -154,9 +159,14 @@ pub fn run(opts: ProxyOptions) -> i32 {
     let mut _index_lock = None;
     let mode = match locate(&opts.sync) {
         Ok(Located::Bzlmod(paths)) => {
+            let notice = opts
+                .zed_server
+                .as_deref()
+                .and_then(|own| zed_notice(own, &paths));
             let mut bazel = BazelMode::new(paths.model_dir, Arc::new(BazelSyncer(opts.sync)))
                 .with_watch(paths.root, DEBOUNCE)
                 .with_library_dir(paths.layout.library_sources_dir());
+            bazel.notice = notice.map(Box::new);
             match paths.layout.lock_index_dir() {
                 Some((dir, lock)) => {
                     _index_lock = Some(lock);
@@ -188,6 +198,28 @@ pub fn run(opts: ProxyOptions) -> i32 {
         let _ = cleanup.join();
     }
     code
+}
+
+/// The notice for a Zed that also runs another Kotlin server here, unless the user muted it.
+fn zed_notice(own: &str, paths: &SyncPaths) -> Option<report::Notice> {
+    let mute = paths.layout.dir.parent()?.join("zed-settings-notice-muted");
+    if mute.exists() {
+        return None;
+    }
+    let user = zed::user_settings_file(&|k| std::env::var(k).ok(), cfg!(target_os = "macos"));
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let project = zed::project_settings_files(&real(&paths.start_dir), &real(&paths.root));
+    let duplicate = zed::duplicate(own, user.as_deref(), &project)?;
+    log(&format!(
+        "Zed also runs {} on this project; see {}",
+        duplicate.others.join(", "),
+        duplicate.settings.display()
+    ));
+    Some(report::Notice {
+        text: zed::notice_text(own, &duplicate),
+        settings: duplicate.settings,
+        mute,
+    })
 }
 
 /// Removes the caches of workspaces that are gone, logging what it did.
@@ -251,8 +283,12 @@ where
             None
         }
         Mode::Bazel(mut bazel) => {
-            let (events, handle) =
-                control::spawn(bazel.syncer.clone(), bazel.watch.take(), client_out.clone());
+            let (events, handle) = control::spawn(
+                bazel.syncer.clone(),
+                bazel.watch.take(),
+                bazel.notice.take().map(|n| *n),
+                client_out.clone(),
+            );
             let to_control = events.clone();
             let library = bazel
                 .library_dir

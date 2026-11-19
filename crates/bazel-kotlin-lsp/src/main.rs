@@ -31,6 +31,7 @@ fn main() -> ExitCode {
             let code = proxy::run(ProxyOptions {
                 sync: args.sync.into_options(false),
                 command: args.command,
+                zed_server: args.zed_server,
             });
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }

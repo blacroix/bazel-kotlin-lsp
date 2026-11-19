@@ -303,3 +303,104 @@ fn output_written_just_before_exit_reaches_the_editor() {
         assert_eq!(*editor.0.lock().unwrap(), reply);
     }
 }
+
+/// Runs the proxy as Zed's extension does, with `home` as HOME, through `initialized`; returns what it sent.
+fn as_zed_extension(dir: &Path, home: &Path, zed_server: Option<&str>) -> Vec<Value> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bazel-kotlin-lsp"));
+    command
+        .arg("proxy")
+        .arg("--workspace")
+        .arg(dir)
+        .arg("--cache-root")
+        .arg(dir.join("cache"))
+        .arg("--bazel")
+        .arg(dir.join("no-such-bazel"));
+    if let Some(name) = zed_server {
+        command.args(["--zed-server", name]);
+    }
+    let mut proxy = command
+        .args(["--", "sh", "-c", RECORD])
+        .arg(dir.join("received"))
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("FLATPAK_XDG_CONFIG_HOME")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = proxy.stdin.take().unwrap();
+    for msg in [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "capabilities": {"window": {"showDocument": {"support": true}}}
+        }}),
+        json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    ] {
+        stdin.write_all(&framed(&msg.to_string())).unwrap();
+    }
+    drop(stdin);
+    let mut out = Vec::new();
+    proxy.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    assert!(wait_with_timeout(&mut proxy, Duration::from_secs(20)).success());
+    messages(&out)
+}
+
+fn zed_notices(sent: &[Value]) -> Vec<&Value> {
+    sent.iter()
+        .filter(|m| {
+            m["params"]["message"]
+                .as_str()
+                .is_some_and(|t| t.contains("Kotlin extension"))
+        })
+        .collect()
+}
+
+fn zed_home(dir: &Path, settings: &str) -> PathBuf {
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join(".config/zed")).unwrap();
+    std::fs::write(home.join(".config/zed/settings.json"), settings).unwrap();
+    home
+}
+
+#[test]
+fn zed_running_kotlin_lsp_too_gets_a_notice() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let home = zed_home(dir, "// defaults\n{ \"theme\": \"One Dark\", }");
+    let sent = as_zed_extension(dir, &home, Some("bazel-kotlin-lsp"));
+    let notices = zed_notices(&sent);
+    assert_eq!(notices.len(), 1, "{sent:#?}");
+    assert_eq!(notices[0]["method"], "window/showMessageRequest");
+    assert_eq!(
+        notices[0]["params"]["actions"],
+        json!([{"title": "Open settings"}, {"title": "Don't show again"}])
+    );
+}
+
+#[test]
+fn no_zed_notice_when_settings_are_right_muted_or_not_zed() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path();
+    std::fs::write(dir.join("MODULE.bazel"), "").unwrap();
+    let defaults = zed_home(dir, "{}");
+    assert!(zed_notices(&as_zed_extension(dir, &defaults, None)).is_empty());
+
+    std::fs::create_dir_all(dir.join(".zed")).unwrap();
+    std::fs::write(
+        dir.join(".zed/settings.json"),
+        r#"{"languages": {"Kotlin": {"language_servers": ["bazel-kotlin-lsp", "!kotlin-lsp", "!kotlin-language-server", "..."]}}}"#,
+    )
+    .unwrap();
+    let sent = as_zed_extension(dir, &defaults, Some("bazel-kotlin-lsp"));
+    assert!(zed_notices(&sent).is_empty(), "{sent:#?}");
+
+    std::fs::remove_dir_all(dir.join(".zed")).unwrap();
+    std::fs::write(
+        dir.join("cache/bazel-kotlin-lsp/zed-settings-notice-muted"),
+        "",
+    )
+    .unwrap();
+    let sent = as_zed_extension(dir, &defaults, Some("bazel-kotlin-lsp"));
+    assert!(zed_notices(&sent).is_empty(), "{sent:#?}");
+}

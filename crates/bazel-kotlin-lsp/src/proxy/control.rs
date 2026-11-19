@@ -11,7 +11,7 @@ use bkl_lsp::write_message;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
 
-use super::report::{Reporter, describe};
+use super::report::{Notice, Reporter, describe};
 use super::schedule::Scheduler;
 use super::watch::WatchFilter;
 use super::{Shared, Syncer, WatchSpec, log};
@@ -44,6 +44,7 @@ pub enum Event {
 pub fn spawn<W: Write + Send + 'static>(
     syncer: Arc<dyn Syncer>,
     watch: Option<WatchSpec>,
+    notice: Option<Notice>,
     client_out: Shared<W>,
 ) -> (Sender<Event>, JoinHandle<()>) {
     let (tx, rx) = channel();
@@ -51,11 +52,15 @@ pub fn spawn<W: Write + Send + 'static>(
     let handle = std::thread::spawn(move || {
         let debounce = watch.as_ref().map_or(Duration::ZERO, |w| w.debounce);
         let watching = watch.and_then(|w| start_watching(&w.root, &events));
+        let mut reporter = Reporter::default();
+        if let Some(notice) = notice {
+            reporter.notice(notice);
+        }
         Control {
             syncer,
             events,
             client_out,
-            reporter: Reporter::default(),
+            reporter,
             scheduler: Scheduler::new(debounce),
             watching,
             running: None,
