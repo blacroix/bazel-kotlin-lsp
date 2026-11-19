@@ -116,6 +116,12 @@ impl Scope {
         })
     }
 
+    /// The scope without `dirs` (relative to the workspace root).
+    pub fn excluding(mut self, dirs: &[PathBuf]) -> Self {
+        self.excludes.extend(dirs.iter().map(|d| normalize(d)));
+        self
+    }
+
     /// Whether a target, whose package lives at `rel_dir` (relative to the workspace root), is a source module.
     pub fn contains(&self, label: &str, rel_dir: &Path) -> bool {
         self.targets.contains(label) || self.contains_dir(rel_dir)
@@ -287,6 +293,20 @@ mod tests {
                 "-//modules/shapes/..."
             ]
         );
+    }
+
+    #[test]
+    fn excluded_nested_workspaces_are_subtracted_and_out_of_scope() {
+        let scope = Scope::whole_repo().excluding(&[PathBuf::from(".delta/worktrees/a/repo")]);
+        assert_eq!(
+            target_patterns(&scope, &[], &[]),
+            ["//...", "-//.delta/worktrees/a/repo/..."]
+        );
+        assert!(!scope.contains(
+            "//.delta/worktrees/a/repo/testing:lib",
+            Path::new(".delta/worktrees/a/repo/testing")
+        ));
+        assert!(scope.contains("//app:app", Path::new("app")));
     }
 
     #[test]

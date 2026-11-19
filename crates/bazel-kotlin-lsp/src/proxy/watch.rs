@@ -1,5 +1,6 @@
 //! Which file changes call for a new sync.
 
+use bkl_core::nested::read_bazelignore;
 use std::path::{Path, PathBuf};
 
 const NAMES: [&str; 10] = [
@@ -85,16 +86,6 @@ impl WatchFilter {
 
 fn relevant_name(name: &str) -> bool {
     NAMES.contains(&name) || name.ends_with(".bzl") || name.ends_with("_install.json")
-}
-
-fn read_bazelignore(root: &Path) -> Vec<PathBuf> {
-    std::fs::read_to_string(root.join(".bazelignore"))
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| PathBuf::from(l.trim_end_matches('/')))
-        .collect()
 }
 
 #[cfg(test)]

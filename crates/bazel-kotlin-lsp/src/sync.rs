@@ -17,6 +17,7 @@ use bkl_core::cache::{
     CacheLayout, cache_root, digest_hex, lock_exclusive, write_if_changed, write_owner,
 };
 use bkl_core::model::{ModelContext, RealFs, build_model, jar_targets, render};
+use bkl_core::nested::nested_workspaces;
 use bkl_core::root::{BazelRoot, find_bazel_root};
 use bkl_core::scope::{
     NARROW_THRESHOLD, Scope, ScopeConfig, load_scope_config, resolve_directories, target_patterns,
@@ -536,6 +537,11 @@ fn choose_scope(
     log: &Path,
 ) -> Result<(Scope, String), SyncError> {
     let root = bazel.workspace.as_path();
+    let nested: Vec<PathBuf> = nested_workspaces(root)
+        .into_iter()
+        .filter(|dir| !modules.iter().any(|m| m.rel_path == *dir))
+        .collect();
+    let chosen = |scope: Scope, description: String| Ok((scope.excluding(&nested), description));
     if !opts.scope_dirs.is_empty() || !opts.targets.is_empty() {
         let cfg = ScopeConfig {
             directories: opts.scope_dirs.clone(),
@@ -545,18 +551,18 @@ fn choose_scope(
             .map_err(|e| SyncError::new(format!("--scope-dir: {e:#}")))?;
         let scope = Scope::from_config(&cfg, root_mapping)
             .map_err(|e| SyncError::new(format!("--target: {e:#}")))?;
-        return Ok((scope, "flags".into()));
+        return chosen(scope, "flags".into());
     }
     let config_file = root.join(CONFIG_FILE);
     if let Some(cfg) = load_scope_config(&config_file)? {
         let scope = resolve_directories(&cfg, root)
             .and_then(|cfg| Scope::from_config(&cfg, root_mapping))
             .map_err(|e| SyncError::new(format!("{}: {e:#}", config_file.display())))?;
-        return Ok((scope, CONFIG_FILE.into()));
+        return chosen(scope, CONFIG_FILE.into());
     }
     let rel = start_dir.strip_prefix(root).unwrap_or(Path::new(""));
     if rel.as_os_str().is_empty() {
-        return Ok((Scope::whole_repo(), "whole repository".into()));
+        return chosen(Scope::whole_repo(), "whole repository".into());
     }
     let key = ScopeDecision {
         start: rel.to_string_lossy().into_owned(),
@@ -570,7 +576,7 @@ fn choose_scope(
     let jvm_targets = match saved {
         Some(decision) => decision.jvm_targets,
         None => {
-            let jvm_targets = count_jvm_targets(bazel, modules, log)?;
+            let jvm_targets = count_jvm_targets(bazel, modules, &nested, log)?;
             let decision = ScopeDecision { jvm_targets, ..key };
             write_if_changed(
                 &layout.scope_decision_file(),
@@ -580,19 +586,20 @@ fn choose_scope(
             jvm_targets
         }
     };
-    Ok(if jvm_targets > NARROW_THRESHOLD {
-        (Scope::folder(rel), format!("folder {}", rel.display()))
+    if jvm_targets > NARROW_THRESHOLD {
+        chosen(Scope::folder(rel), format!("folder {}", rel.display()))
     } else {
-        (Scope::whole_repo(), "whole repository".into())
-    })
+        chosen(Scope::whole_repo(), "whole repository".into())
+    }
 }
 
 fn count_jvm_targets(
     bazel: &Bazel,
     modules: &[LocalModule],
+    nested: &[PathBuf],
     log: &Path,
 ) -> Result<usize, SyncError> {
-    let patterns = target_patterns(&Scope::whole_repo(), modules, &[]);
+    let patterns = target_patterns(&Scope::whole_repo().excluding(nested), modules, &[]);
     let (positive, negative): (Vec<&String>, Vec<&String>) =
         patterns.iter().partition(|p| !p.starts_with('-'));
     let mut universe = positive

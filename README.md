@@ -85,6 +85,9 @@ bazel-kotlin-lsp sync --workspace /path/to/repo
 output base sit next to it. Point kotlin-lsp at that folder with the initialization option
 `{"projects": [{"type": "json", "path": "file:///that/folder"}]}`. Nothing is written into your repository.
 
+Bazel workspaces nested inside the repository, such as worktrees that some tools keep inside the checkout, are left
+out: open one as its own project to navigate it.
+
 ## Supported versions
 
 - Bazel 8.0.0 or later, with Bzlmod (`MODULE.bazel`). WORKSPACE-only repositories are not supported.

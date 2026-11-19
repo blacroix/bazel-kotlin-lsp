@@ -207,3 +207,37 @@ fn scope_on_one_package_keeps_its_neighbour_out() {
             .any(|l| l["name"] == "@@//layout/src/main/kotlin/fixture/layout/core:core")
     );
 }
+
+/// Tools that keep worktrees inside the checkout put whole Bazel workspaces under the root; `//...` would build
+/// them as packages of this one, against a MODULE.bazel that may lack their repositories.
+#[test]
+#[ignore = "needs Bazel and network"]
+fn a_workspace_nested_in_the_repository_is_left_out() {
+    let s = Synced::new();
+    let copy = s.fixture.path().join(".worktrees/feature/repo");
+    std::fs::create_dir_all(copy.join("testing")).unwrap();
+    std::fs::write(copy.join("MODULE.bazel"), "module(name = \"copy\")\n").unwrap();
+    std::fs::write(
+        copy.join("testing/BUILD.bazel"),
+        "load(\"@rules_kotlin//kotlin:jvm.bzl\", \"kt_jvm_library\")\n\
+         kt_jvm_library(name = \"lib\", srcs = [\"Lib.kt\"], deps = [\"@unknown_maven//:junit\"])\n",
+    )
+    .unwrap();
+    std::fs::write(copy.join("testing/Lib.kt"), "package copy\n").unwrap();
+    let standalone = s.fixture.path().join("standalone");
+    std::fs::create_dir_all(&standalone).unwrap();
+    std::fs::write(standalone.join("MODULE.bazel"), "").unwrap();
+
+    let outcome = run_sync(&s.options()).unwrap();
+    assert_eq!(outcome.summary.status, "ok", "{:?}", outcome.summary);
+    let ws = workspace_json(&outcome.model_dir);
+    let roots: Vec<&str> = ws["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["contentRoots"].as_array().unwrap())
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert!(!roots.is_empty());
+    assert!(roots.iter().all(|r| !r.contains(".worktrees")), "{roots:?}");
+}
