@@ -216,13 +216,56 @@ fn completion_label(
         label,
         kind.and_then(highlight).map(String::from),
     )];
-    spans.extend(detail.map(|d| zed::CodeLabelSpan::literal(d, dim())));
+    spans.extend(detail.map(|d| zed::CodeLabelSpan::literal(shorten_detail(d), dim())));
     spans.extend(description.map(|d| zed::CodeLabelSpan::literal(format!(" {d}"), dim())));
     Some(zed::CodeLabel {
         code: String::new(),
         spans,
         filter_range: (0..label.len()).into(),
     })
+}
+
+/// `detail` with its package shortened: Zed cuts the completion menu at a fixed width, losing a long package's end.
+fn shorten_detail(detail: &str) -> String {
+    let in_parentheses = detail
+        .strip_suffix(')')
+        .and_then(|d| d.rsplit_once(" ("))
+        .map(|(head, package)| (format!("{head} ("), package, ")"));
+    let after_in = || {
+        detail
+            .rsplit_once(" in ")
+            .map(|(head, package)| (format!("{head} in "), package, ""))
+    };
+    match in_parentheses
+        .filter(|(_, p, _)| is_package(p))
+        .or_else(|| after_in().filter(|(_, p, _)| is_package(p)))
+    {
+        Some((head, package, tail)) => format!("{head}{}{tail}", shorten_package(package)),
+        None => detail.to_string(),
+    }
+}
+
+fn is_package(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+}
+
+/// Abbreviates segments to their initial, left to right and never the last, until the package fits.
+fn shorten_package(package: &str) -> String {
+    const FITS: usize = 30;
+    let mut segments: Vec<String> = package.split('.').map(String::from).collect();
+    let length = |segments: &[String]| segments.iter().map(|s| s.len() + 1).sum::<usize>() - 1;
+    for i in 0..segments.len().saturating_sub(1) {
+        if length(&segments) <= FITS {
+            break;
+        }
+        if let Some(initial) = segments[i].chars().next() {
+            segments[i] = initial.to_string();
+        }
+    }
+    segments.join(".")
 }
 
 /// The highlight Zed's own label gives a completion of this kind.
@@ -300,6 +343,44 @@ mod tests {
             highlights(&label),
             [Some("function"), Some("comment"), Some("comment")]
         );
+    }
+
+    #[test]
+    fn long_packages_shrink_from_the_left_until_they_fit() {
+        assert_eq!(
+            shorten_package("com.example.shop.game.server.games.session"),
+            "c.e.s.g.server.games.session"
+        );
+        assert_eq!(
+            shorten_package("com.example.shop.game.server.infrastructure.driving.http.dto"),
+            "c.e.s.g.s.i.driving.http.dto"
+        );
+        assert_eq!(
+            shorten_package("io.ktor.server.auth"),
+            "io.ktor.server.auth"
+        );
+        assert_eq!(shorten_package("a.b"), "a.b");
+    }
+
+    #[test]
+    fn the_package_in_a_detail_is_shortened_and_the_rest_kept() {
+        let long = "com.example.shop.game.server.games.session";
+        assert_eq!(
+            shorten_detail(&format!(" ({long})")),
+            " (c.e.s.g.server.games.session)"
+        );
+        assert_eq!(
+            shorten_detail(&format!("(shape: Shape) ({long})")),
+            "(shape: Shape) (c.e.s.g.server.games.session)"
+        );
+        assert_eq!(
+            shorten_detail(&format!(
+                "(transform: (Int) -> R) for Iterable<T> in {long}"
+            )),
+            "(transform: (Int) -> R) for Iterable<T> in c.e.s.g.server.games.session"
+        );
+        assert_eq!(shorten_detail("(shape: Shape)"), "(shape: Shape)");
+        assert_eq!(shorten_detail(" { f: (Int) -> R }"), " { f: (Int) -> R }");
     }
 
     #[test]
